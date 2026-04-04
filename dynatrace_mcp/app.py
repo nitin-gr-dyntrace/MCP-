@@ -25,8 +25,8 @@ from .config import (
     SUPPORT_SYNONYMS,
     configured_allowed_hosts,
 )
-from .diagnosis import diagnose_problem, identify_component, matched_product_profiles
-from .models import ConnectorDocument, CorpusEntry, Diagnosis, Playbook, SearchResult
+from .diagnosis import classify_concern, diagnose_problem, identify_component, matched_product_profiles
+from .models import ConnectorDocument, CorpusEntry, Diagnosis, SearchResult
 
 
 class TextExtractor(HTMLParser):
@@ -286,25 +286,6 @@ def diagnose_url(url: str) -> dict[str, Any]:
         report["http_error"] = str(exc)
 
     return report
-
-
-def decode_duckduckgo_href(href: str) -> str | None:
-    if href.startswith("//"):
-        href = f"https:{href}"
-
-    parsed = urlparse(href)
-
-    # DuckDuckGo may return both relative and absolute redirect links.
-    if href.startswith("/") or parsed.hostname in {
-        "duckduckgo.com",
-        "www.duckduckgo.com",
-        "html.duckduckgo.com",
-    }:
-        query = parse_qs(parsed.query)
-        uddg = query.get("uddg", [])
-        return unescape(uddg[0]) if uddg else None
-
-    return href
 
 
 def iter_loc_elements(root: ElementTree.Element) -> list[str]:
@@ -890,46 +871,6 @@ def build_connector_registry() -> dict[str, BaseConnector]:
 
 CONNECTORS = build_connector_registry()
 
-
-def classify_concern(problem_statement: str) -> list[str]:
-    lower = problem_statement.lower()
-    labels: list[str] = []
-
-    if re.search(
-        r"not working|broken|failing|error|issue|down|unavailable|stopped|not sending|missing data|no data",
-        lower,
-    ):
-        labels.append("product_not_working")
-    if re.search(r"bug|defect|regression|unexpected|incorrect behavior", lower):
-        labels.append("possible_bug_for_engineering")
-    if re.search(r"impact|affected|outage|degradation|production|environment|tenant|cluster", lower):
-        labels.append("customer_environment_impact")
-
-    return labels or ["general_support_investigation"]
-
-
-def matched_playbooks(problem_statement: str) -> list[Playbook]:
-    return diagnose_problem(problem_statement).matched_playbooks
-
-
-def investigation_questions(problem_statement: str, component: str, concern_types: list[str]) -> list[str]:
-    questions = [
-        "What changed just before the issue started, such as configuration, rollout, upgrade, or network changes?",
-        "What is the exact scope of impact: one host, one cluster, one tenant, or all environments?",
-        "Can the customer share timestamps, screenshots, logs, and exact error messages?",
-    ]
-
-    for profile in matched_product_profiles(problem_statement)[:2]:
-        questions.extend(profile["questions"])
-    for playbook in matched_playbooks(problem_statement):
-        questions.extend(playbook.questions)
-    if "possible_bug_for_engineering" in concern_types:
-        questions.append("Can the issue be reproduced consistently, and what are the exact steps?")
-
-    deduped = list(dict.fromkeys(questions))
-    return deduped[:7]
-
-
 def investigation_questions_from_diagnosis(problem_statement: str, diagnosis: Diagnosis) -> list[str]:
     questions = [
         "What changed just before the issue started, such as configuration, rollout, upgrade, or network changes?",
@@ -961,22 +902,6 @@ def recommended_actions(concern_types: list[str], component: str) -> list[str]:
         actions.append("Prioritize mitigation, temporary workaround, and customer communication cadence.")
     return actions
 
-
-def evidence_checklist(problem_statement: str, concern_types: list[str]) -> list[str]:
-    evidence = [
-        "Timeline of when the issue started and whether it is still active",
-        "Exact error text, screenshots, and affected entity identifiers",
-        "Recent changes before impact started",
-    ]
-    for profile in matched_product_profiles(problem_statement)[:2]:
-        evidence.extend(profile["evidence"])
-    for playbook in matched_playbooks(problem_statement):
-        evidence.extend(playbook.evidence)
-    if "possible_bug_for_engineering" in concern_types:
-        evidence.append("Expected versus actual behavior with reproducible steps")
-    return list(dict.fromkeys(evidence))[:8]
-
-
 def evidence_checklist_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
     evidence = [
         "Timeline of when the issue started and whether it is still active",
@@ -994,18 +919,6 @@ def evidence_checklist_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
         evidence.append("Expected versus actual behavior with reproducible steps")
     return list(dict.fromkeys(evidence))[:8]
 
-
-def risk_flags(problem_statement: str, concern_types: list[str]) -> list[str]:
-    flags: list[str] = []
-    for profile in matched_product_profiles(problem_statement)[:2]:
-        flags.extend(profile["risks"])
-    if "customer_environment_impact" in concern_types:
-        flags.append("active customer-environment impact")
-    if "possible_bug_for_engineering" in concern_types:
-        flags.append("possible product defect or regression")
-    return list(dict.fromkeys(flags))[:6]
-
-
 def risk_flags_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
     flags: list[str] = []
     profiles = [profile for profile in PRODUCT_AREA_PROFILES if profile["name"] == diagnosis.product_area]
@@ -1016,23 +929,6 @@ def risk_flags_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
     if "possible_bug_for_engineering" in diagnosis.concern_types:
         flags.append("possible product defect or regression")
     return list(dict.fromkeys(flags))[:6]
-
-
-def generate_hypotheses(problem_statement: str, concern_types: list[str], component: str) -> list[str]:
-    hypotheses = [
-        f"The issue may be caused by a configuration or prerequisite gap in {component}.",
-        "The issue may align with a documented limitation or expected behavior that needs verification.",
-    ]
-    for playbook in matched_playbooks(problem_statement):
-        hypotheses.extend([f"Likely failure domain: {domain}." for domain in playbook.failure_domains])
-    if "product_not_working" in concern_types:
-        hypotheses.append("A deployment, upgrade, or environmental change may have interrupted normal product behavior.")
-    if "possible_bug_for_engineering" in concern_types:
-        hypotheses.append("The behavior may indicate a regression or undocumented product defect.")
-    if "customer_environment_impact" in concern_types:
-        hypotheses.append("The issue may have operational blast radius and should be treated as an active incident until scoped.")
-    return hypotheses[:5]
-
 
 def generate_hypotheses_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
     hypotheses = [
@@ -1050,14 +946,6 @@ def generate_hypotheses_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
         hypotheses.append("The issue may have operational blast radius and should be treated as an active incident until scoped.")
     return list(dict.fromkeys(hypotheses))[:6]
 
-
-def playbook_mitigations(problem_statement: str) -> list[str]:
-    mitigations: list[str] = []
-    for playbook in matched_playbooks(problem_statement):
-        mitigations.extend(playbook.mitigations)
-    return list(dict.fromkeys(mitigations))[:5]
-
-
 def playbook_mitigations_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
     mitigations: list[str] = []
     for failure_mode in diagnosis.failure_modes:
@@ -1066,14 +954,6 @@ def playbook_mitigations_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
         mitigations.extend(playbook.mitigations)
     return list(dict.fromkeys(mitigations))[:5]
 
-
-def escalation_criteria(problem_statement: str) -> list[str]:
-    criteria: list[str] = []
-    for playbook in matched_playbooks(problem_statement):
-        criteria.extend(playbook.escalate_when)
-    return list(dict.fromkeys(criteria))[:5]
-
-
 def escalation_criteria_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
     criteria: list[str] = []
     for failure_mode in diagnosis.failure_modes:
@@ -1081,14 +961,6 @@ def escalation_criteria_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
     for playbook in diagnosis.matched_playbooks:
         criteria.extend(playbook.escalate_when)
     return list(dict.fromkeys(criteria))[:5]
-
-
-def summarize_results(results: list[SearchResult]) -> list[str]:
-    summaries: list[str] = []
-    for result in results[:3]:
-        summaries.append(f"{result.title} ({result.source})")
-    return summaries
-
 
 def compare_results_by_source(results: list[SearchResult]) -> str:
     docs_count = sum(1 for result in results if result.source == "docs")
