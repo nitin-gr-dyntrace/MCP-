@@ -211,6 +211,17 @@ class Playbook:
     escalate_when: list[str]
 
 
+@dataclass
+class Diagnosis:
+    product_area: str
+    product_confidence: float
+    concern_types: list[str]
+    severity: str
+    matched_playbooks: list[Playbook]
+    failure_domains: list[str]
+    component_keywords: list[str]
+
+
 class TextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -695,6 +706,17 @@ def search_source(query: str, source: str, max_results: int) -> list[SearchResul
     ][:max_results]
 
 
+def retrieval_query(problem_statement: str, diagnosis: Diagnosis | None) -> str:
+    if diagnosis is None:
+        return problem_statement
+
+    focused_terms = diagnosis.component_keywords[:6]
+    if not focused_terms:
+        return problem_statement
+
+    return f"{problem_statement} {' '.join(focused_terms)}"
+
+
 def debug_search_source(query: str, source: str) -> dict[str, Any]:
     sitemap_url = SITEMAP_URLS[source]
     sitemap_urls = fetch_sitemap_urls(source)
@@ -749,15 +771,16 @@ def prime_topic_cache(query: str, sources: list[str], max_pages: int) -> dict[st
     }
 
 
-def search_knowledge(query: str, sources: list[str], max_results: int) -> list[SearchResult]:
-    cached_results = rank_cached_entries(query, sources, max_results)
+def search_knowledge(query: str, sources: list[str], max_results: int, diagnosis: Diagnosis | None = None) -> list[SearchResult]:
+    effective_query = retrieval_query(query, diagnosis)
+    cached_results = rank_cached_entries(effective_query, sources, max_results)
     if len(cached_results) >= max_results:
         return cached_results[:max_results]
 
     per_source = max(2, (max_results + len(sources) - 1) // len(sources))
     live_results_by_source: dict[str, list[SearchResult]] = {}
     for source in sources:
-        live_results_by_source[source] = search_source(query, source, per_source)
+        live_results_by_source[source] = search_source(effective_query, source, per_source)
 
     combined_by_url: dict[str, SearchResult] = {}
     for result in cached_results:
@@ -788,8 +811,8 @@ def search_knowledge(query: str, sources: list[str], max_results: int) -> list[S
     candidate_by_url = {entry.url: entry for entry in candidate_entries}
     combined.sort(
         key=lambda result: (
-            score_entry_for_query(candidate_by_url[result.url], query)
-            + (semantic_similarity(candidate_by_url[result.url], query, candidate_entries) * 100.0)
+            score_entry_for_query(candidate_by_url[result.url], effective_query)
+            + (semantic_similarity(candidate_by_url[result.url], effective_query, candidate_entries) * 100.0)
         ),
         reverse=True,
     )
@@ -1075,52 +1098,130 @@ def matched_product_profiles(problem_statement: str) -> list[dict[str, Any]]:
     matches.sort(key=lambda item: item[0], reverse=True)
     return [profile for _, profile in matches]
 
-
-def matched_playbooks(problem_statement: str) -> list[Playbook]:
+def product_area_candidates(problem_statement: str) -> list[tuple[float, str, dict[str, Any] | None]]:
     lower = problem_statement.lower()
-    component = identify_component(problem_statement)
-    matches: list[tuple[int, Playbook]] = []
+    candidates: list[tuple[float, str, dict[str, Any] | None]] = []
+
+    for profile in PRODUCT_AREA_PROFILES:
+        score = 0.0
+        for keyword in profile["keywords"]:
+            if keyword in lower:
+                score += 8.0 if " " in keyword else 5.0
+        if score > 0:
+            candidates.append((score, profile["name"], profile))
+
+    fallback_map = [
+        ("activegate", "ActiveGate"),
+        ("oneagent", "OneAgent"),
+        ("synthetic", "DEM"),
+        ("rum", "DEM"),
+        ("log", "Log Monitoring"),
+        ("kubernetes", "Kubernetes Monitoring"),
+        ("extension", "Extensions"),
+        ("token", "API / Authentication"),
+        ("api", "API / Authentication"),
+        ("metric", "Metrics Ingestion"),
+        ("davis", "Davis / Alerting"),
+    ]
+    if not candidates:
+        for needle, label in fallback_map:
+            if needle in lower:
+                candidates.append((4.0, label, None))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates
+
+
+def matched_playbooks_for_area(problem_statement: str, product_area: str) -> list[Playbook]:
+    lower = problem_statement.lower()
+    matches: list[tuple[float, Playbook]] = []
 
     for playbook in load_playbooks():
-        score = 0
-        if playbook.product_area == component:
-            score += 12
+        if playbook.product_area != product_area:
+            continue
+
+        score = 0.0
         for trigger in playbook.triggers:
             if trigger.lower() in lower:
-                score += 6
+                score += 7.0 if " " in trigger else 5.0
         for keyword in playbook.keywords:
             if keyword.lower() in lower:
-                score += 3
+                score += 2.0
         if score > 0:
             matches.append((score, playbook))
 
     matches.sort(key=lambda item: item[0], reverse=True)
     return [playbook for _, playbook in matches[:2]]
 
+def diagnose_problem(problem_statement: str) -> Diagnosis:
+    candidates = product_area_candidates(problem_statement)
+    if candidates:
+        top_score, product_area, profile = candidates[0]
+    else:
+        top_score, product_area, profile = (0.0, "General Dynatrace platform", None)
+
+    concern_types = classify_concern(problem_statement)
+    severity = estimate_severity(problem_statement, concern_types)
+    playbooks = matched_playbooks_for_area(problem_statement, product_area)
+
+    failure_domains: list[str] = []
+    if playbooks:
+        for playbook in playbooks:
+            failure_domains.extend(playbook.failure_domains)
+    elif profile:
+        failure_domains.append(f"Potential issue within {product_area} requiring product-specific validation.")
+
+    query_tokens = set(tokenize(problem_statement))
+    clue_weights = {
+        "certificate": ["certificate", "trust", "tls", "san", "hostname"],
+        "tls": ["certificate", "trust", "tls", "san", "hostname"],
+        "proxy": ["proxy", "outbound", "network path"],
+        "capacity": ["capacity", "queue", "sizing", "backlog"],
+        "queue": ["capacity", "queue", "sizing", "backlog"],
+        "routing": ["routing", "network path", "proxy"],
+    }
+
+    def domain_score(domain: str) -> int:
+        lower_domain = domain.lower()
+        score = sum(1 for token in query_tokens if token in lower_domain)
+        for token in query_tokens:
+            for clue in clue_weights.get(token, []):
+                if clue in lower_domain:
+                    score += 3
+        return score
+
+    failure_domains = sorted(
+        list(dict.fromkeys(failure_domains)),
+        key=domain_score,
+        reverse=True,
+    )
+
+    keywords: list[str] = []
+    if profile:
+        keywords.extend(profile["keywords"])
+    for playbook in playbooks:
+        keywords.extend(playbook.triggers)
+        keywords.extend(playbook.keywords)
+
+    product_confidence = min(0.98, 0.3 + (top_score / 30.0))
+
+    return Diagnosis(
+        product_area=product_area,
+        product_confidence=product_confidence,
+        concern_types=concern_types,
+        severity=severity,
+        matched_playbooks=playbooks,
+        failure_domains=failure_domains[:6],
+        component_keywords=list(dict.fromkeys(keywords))[:20],
+    )
+
+
+def matched_playbooks(problem_statement: str) -> list[Playbook]:
+    return diagnose_problem(problem_statement).matched_playbooks
+
 
 def identify_component(problem_statement: str) -> str:
-    matches = matched_product_profiles(problem_statement)
-    if matches:
-        return matches[0]["name"]
-
-    lower = problem_statement.lower()
-    component_map = [
-        ("oneagent", "OneAgent"),
-        ("activegate", "ActiveGate"),
-        ("kubernetes", "Kubernetes Monitoring"),
-        ("openshift", "Kubernetes Monitoring"),
-        ("log", "Log Monitoring"),
-        ("rum", "DEM"),
-        ("synthetic", "Synthetic monitoring"),
-        ("api", "API / authentication"),
-        ("token", "API / authentication"),
-        ("extension", "Extensions"),
-        ("metric", "Metrics ingestion"),
-    ]
-    for needle, label in component_map:
-        if needle in lower:
-            return label
-    return "General Dynatrace platform"
+    return diagnose_problem(problem_statement).product_area
 
 
 def estimate_severity(problem_statement: str, concern_types: list[str]) -> str:
@@ -1152,6 +1253,22 @@ def investigation_questions(problem_statement: str, component: str, concern_type
     return deduped[:7]
 
 
+def investigation_questions_from_diagnosis(problem_statement: str, diagnosis: Diagnosis) -> list[str]:
+    questions = [
+        "What changed just before the issue started, such as configuration, rollout, upgrade, or network changes?",
+        "What is the exact scope of impact: one host, one cluster, one tenant, or all environments?",
+        "Can the customer share timestamps, screenshots, logs, and exact error messages?",
+    ]
+    profiles = [profile for profile in PRODUCT_AREA_PROFILES if profile["name"] == diagnosis.product_area]
+    for profile in profiles[:1]:
+        questions.extend(profile["questions"])
+    for playbook in diagnosis.matched_playbooks:
+        questions.extend(playbook.questions)
+    if "possible_bug_for_engineering" in diagnosis.concern_types:
+        questions.append("Can the issue be reproduced consistently, and what are the exact steps?")
+    return list(dict.fromkeys(questions))[:7]
+
+
 def recommended_actions(concern_types: list[str], component: str) -> list[str]:
     actions = [
         f"Validate the expected behavior for {component} against the top Dynatrace references.",
@@ -1181,6 +1298,22 @@ def evidence_checklist(problem_statement: str, concern_types: list[str]) -> list
     return list(dict.fromkeys(evidence))[:8]
 
 
+def evidence_checklist_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
+    evidence = [
+        "Timeline of when the issue started and whether it is still active",
+        "Exact error text, screenshots, and affected entity identifiers",
+        "Recent changes before impact started",
+    ]
+    profiles = [profile for profile in PRODUCT_AREA_PROFILES if profile["name"] == diagnosis.product_area]
+    for profile in profiles[:1]:
+        evidence.extend(profile["evidence"])
+    for playbook in diagnosis.matched_playbooks:
+        evidence.extend(playbook.evidence)
+    if "possible_bug_for_engineering" in diagnosis.concern_types:
+        evidence.append("Expected versus actual behavior with reproducible steps")
+    return list(dict.fromkeys(evidence))[:8]
+
+
 def risk_flags(problem_statement: str, concern_types: list[str]) -> list[str]:
     flags: list[str] = []
     for profile in matched_product_profiles(problem_statement)[:2]:
@@ -1188,6 +1321,18 @@ def risk_flags(problem_statement: str, concern_types: list[str]) -> list[str]:
     if "customer_environment_impact" in concern_types:
         flags.append("active customer-environment impact")
     if "possible_bug_for_engineering" in concern_types:
+        flags.append("possible product defect or regression")
+    return list(dict.fromkeys(flags))[:6]
+
+
+def risk_flags_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
+    flags: list[str] = []
+    profiles = [profile for profile in PRODUCT_AREA_PROFILES if profile["name"] == diagnosis.product_area]
+    for profile in profiles[:1]:
+        flags.extend(profile["risks"])
+    if "customer_environment_impact" in diagnosis.concern_types:
+        flags.append("active customer-environment impact")
+    if "possible_bug_for_engineering" in diagnosis.concern_types:
         flags.append("possible product defect or regression")
     return list(dict.fromkeys(flags))[:6]
 
@@ -1208,6 +1353,21 @@ def generate_hypotheses(problem_statement: str, concern_types: list[str], compon
     return hypotheses[:5]
 
 
+def generate_hypotheses_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
+    hypotheses = [
+        f"The issue may be caused by a configuration or prerequisite gap in {diagnosis.product_area}.",
+        "The issue may align with a documented limitation or expected behavior that needs verification.",
+    ]
+    hypotheses.extend([f"Likely failure domain: {domain}." for domain in diagnosis.failure_domains])
+    if "product_not_working" in diagnosis.concern_types:
+        hypotheses.append("A deployment, upgrade, or environmental change may have interrupted normal product behavior.")
+    if "possible_bug_for_engineering" in diagnosis.concern_types:
+        hypotheses.append("The behavior may indicate a regression or undocumented product defect.")
+    if "customer_environment_impact" in diagnosis.concern_types:
+        hypotheses.append("The issue may have operational blast radius and should be treated as an active incident until scoped.")
+    return list(dict.fromkeys(hypotheses))[:6]
+
+
 def playbook_mitigations(problem_statement: str) -> list[str]:
     mitigations: list[str] = []
     for playbook in matched_playbooks(problem_statement):
@@ -1215,9 +1375,23 @@ def playbook_mitigations(problem_statement: str) -> list[str]:
     return list(dict.fromkeys(mitigations))[:5]
 
 
+def playbook_mitigations_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
+    mitigations: list[str] = []
+    for playbook in diagnosis.matched_playbooks:
+        mitigations.extend(playbook.mitigations)
+    return list(dict.fromkeys(mitigations))[:5]
+
+
 def escalation_criteria(problem_statement: str) -> list[str]:
     criteria: list[str] = []
     for playbook in matched_playbooks(problem_statement):
+        criteria.extend(playbook.escalate_when)
+    return list(dict.fromkeys(criteria))[:5]
+
+
+def escalation_criteria_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
+    criteria: list[str] = []
+    for playbook in diagnosis.matched_playbooks:
         criteria.extend(playbook.escalate_when)
     return list(dict.fromkeys(criteria))[:5]
 
@@ -1242,27 +1416,68 @@ def compare_results_by_source(results: list[SearchResult]) -> str:
     return "No source comparison is available yet."
 
 
+def customer_issue_explanation(diagnosis: Diagnosis) -> str:
+    if diagnosis.matched_playbooks and diagnosis.failure_domains:
+        primary = diagnosis.failure_domains[0].rstrip(".")
+        return f"Based on the current symptoms, this appears most consistent with {primary.lower()} in {diagnosis.product_area}."
+    return f"Based on the current symptoms, this appears to be related to {diagnosis.product_area}."
+
+
+def build_customer_response_draft(problem_statement: str, diagnosis: Diagnosis, results: list[SearchResult]) -> str:
+    requests = investigation_questions_from_diagnosis(problem_statement, diagnosis)[:3]
+    mitigations = playbook_mitigations_from_diagnosis(diagnosis)[:2]
+    body = [
+        "Hi Team,",
+        "",
+        f"{customer_issue_explanation(diagnosis)} Since the issue appears limited to {diagnosis.product_area} and the current scope is {diagnosis.severity} severity, this is more likely to be isolated configuration or connectivity behavior than a platform-wide failure.",
+        "",
+        "To move this forward, could you please share the following:",
+        *[f"- {item}" for item in requests],
+    ]
+
+    if mitigations:
+        body.extend(
+            [
+                "",
+                "As an initial step, you may also consider:",
+                *[f"- {item}" for item in mitigations],
+            ]
+        )
+
+    body.extend(
+        [
+            "",
+            "We’ll review the details and guide you on the next best action once we have this information.",
+        ]
+    )
+
+    return "\n".join(body)
+
+
 def build_triage_text(problem_statement: str, sources: list[str], max_results: int) -> str:
-    concern_types = classify_concern(problem_statement)
-    component = identify_component(problem_statement)
-    severity = estimate_severity(problem_statement, concern_types)
-    results = search_knowledge(problem_statement, sources, max_results)
-    questions = investigation_questions(problem_statement, component, concern_types)
+    diagnosis = diagnose_problem(problem_statement)
+    concern_types = diagnosis.concern_types
+    component = diagnosis.product_area
+    severity = diagnosis.severity
+    results = search_knowledge(problem_statement, sources, max_results, diagnosis)
+    questions = investigation_questions_from_diagnosis(problem_statement, diagnosis)
     actions = recommended_actions(concern_types, component)
-    hypotheses = generate_hypotheses(problem_statement, concern_types, component)
-    evidence = evidence_checklist(problem_statement, concern_types)
-    risks = risk_flags(problem_statement, concern_types)
+    hypotheses = generate_hypotheses_from_diagnosis(diagnosis)
+    evidence = evidence_checklist_from_diagnosis(diagnosis)
+    risks = risk_flags_from_diagnosis(diagnosis)
     source_insight = compare_results_by_source(results)
     risk_items = [f"- {flag}" for flag in risks] if risks else ["- No elevated risk flags identified yet."]
-    playbooks = matched_playbooks(problem_statement)
-    mitigation_items = [f"- {item}" for item in playbook_mitigations(problem_statement)]
-    escalation_items = [f"- {item}" for item in escalation_criteria(problem_statement)]
+    playbooks = diagnosis.matched_playbooks
+    mitigation_items = [f"- {item}" for item in playbook_mitigations_from_diagnosis(diagnosis)]
+    escalation_items = [f"- {item}" for item in escalation_criteria_from_diagnosis(diagnosis)]
+    customer_draft = build_customer_response_draft(problem_statement, diagnosis, results)
 
     return "\n".join(
         [
             f"Problem statement: {problem_statement}",
             f"Concern types: {', '.join(concern_types)}",
             f"Likely component: {component}",
+            f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
             f"Estimated severity: {severity}",
             f"Matched playbooks: {', '.join(playbook.title for playbook in playbooks) if playbooks else 'None'}",
             f"Source insight: {source_insight}",
@@ -1288,6 +1503,9 @@ def build_triage_text(problem_statement: str, sources: list[str], max_results: i
             "Escalate to engineering when:",
             *(escalation_items or ["- Escalate after configuration and environment causes are ruled out."]),
             "",
+            "Short customer-facing response draft:",
+            customer_draft,
+            "",
             "Top references:",
             format_results(results),
         ]
@@ -1295,17 +1513,19 @@ def build_triage_text(problem_statement: str, sources: list[str], max_results: i
 
 
 def build_bug_escalation_text(problem_statement: str, sources: list[str], max_results: int) -> str:
-    concern_types = classify_concern(problem_statement)
-    component = identify_component(problem_statement)
-    results = search_knowledge(problem_statement, sources, max_results)
-    evidence = evidence_checklist(problem_statement, concern_types)
-    hypotheses = generate_hypotheses(problem_statement, concern_types, component)
-    escalation_items = escalation_criteria(problem_statement)
+    diagnosis = diagnose_problem(problem_statement)
+    concern_types = diagnosis.concern_types
+    component = diagnosis.product_area
+    results = search_knowledge(problem_statement, sources, max_results, diagnosis)
+    evidence = evidence_checklist_from_diagnosis(diagnosis)
+    hypotheses = generate_hypotheses_from_diagnosis(diagnosis)
+    escalation_items = escalation_criteria_from_diagnosis(diagnosis)
 
     return "\n".join(
         [
             "Engineering escalation draft",
             f"Component: {component}",
+            f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
             f"Concern types: {', '.join(concern_types)}",
             "",
             f"Problem summary: {problem_statement}",
@@ -1326,46 +1546,22 @@ def build_bug_escalation_text(problem_statement: str, sources: list[str], max_re
 
 
 def build_customer_response_text(problem_statement: str, sources: list[str], max_results: int) -> str:
-    concern_types = classify_concern(problem_statement)
-    component = identify_component(problem_statement)
-    results = search_knowledge(problem_statement, sources, max_results)
-    summaries = summarize_results(results)
-    next_steps = recommended_actions(concern_types, component)[:3]
-    checked_items = [f"- {summary}" for summary in summaries]
-    if not checked_items:
-        checked_items = ["- Relevant Dynatrace references are still being gathered."]
-    requests = investigation_questions(problem_statement, component, concern_types)[:3]
-    mitigations = playbook_mitigations(problem_statement)[:2]
-
-    return "\n".join(
-        [
-            "Draft customer response",
-            "",
-            f"We reviewed the reported issue related to {component}. Based on the current information, the case appears to fit: {', '.join(concern_types)}.",
-            "",
-            "What we checked:",
-            *checked_items,
-            "",
-            "Recommended next steps:",
-            *[f"- {step}" for step in next_steps],
-            *[f"- Consider: {item}" for item in mitigations],
-            "",
-            "Information needed from the customer:",
-            *[f"- {item}" for item in requests],
-        ]
-    )
+    diagnosis = diagnose_problem(problem_statement)
+    results = search_knowledge(problem_statement, sources, max_results, diagnosis)
+    return build_customer_response_draft(problem_statement, diagnosis, results)
 
 
 def build_investigation_plan_text(problem_statement: str, sources: list[str], max_results: int) -> str:
-    concern_types = classify_concern(problem_statement)
-    component = identify_component(problem_statement)
-    results = search_knowledge(problem_statement, sources, max_results)
-    hypotheses = generate_hypotheses(problem_statement, concern_types, component)
-    evidence = evidence_checklist(problem_statement, concern_types)
+    diagnosis = diagnose_problem(problem_statement)
+    concern_types = diagnosis.concern_types
+    component = diagnosis.product_area
+    results = search_knowledge(problem_statement, sources, max_results, diagnosis)
+    hypotheses = generate_hypotheses_from_diagnosis(diagnosis)
+    evidence = evidence_checklist_from_diagnosis(diagnosis)
     actions = recommended_actions(concern_types, component)
-    playbooks = matched_playbooks(problem_statement)
-    mitigations = playbook_mitigations(problem_statement)
-    escalation_items = escalation_criteria(problem_statement)
+    playbooks = diagnosis.matched_playbooks
+    mitigations = playbook_mitigations_from_diagnosis(diagnosis)
+    escalation_items = escalation_criteria_from_diagnosis(diagnosis)
 
     steps = [
         "Validate issue scope and timeline with the customer.",
@@ -1382,6 +1578,7 @@ def build_investigation_plan_text(problem_statement: str, sources: list[str], ma
         [
             "Investigation plan",
             f"Likely component: {component}",
+            f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
             f"Concern types: {', '.join(concern_types)}",
             f"Matched playbooks: {', '.join(playbook.title for playbook in playbooks) if playbooks else 'None'}",
             "",
