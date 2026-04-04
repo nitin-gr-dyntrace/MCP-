@@ -14,6 +14,19 @@ It helps a support engineer:
 
 It is also structured for future enterprise connectors such as Jira, Slack, and Stack Overflow.
 It now includes editable product-area support playbooks in `playbooks.json`.
+It also includes a lightweight evaluation harness in `eval.py`.
+
+## Project Layout
+
+The entry script [server.py](/Users/nitin/Documents/Playground/server.py) is intentionally small.
+
+Core modules now live under [dynatrace_mcp](/Users/nitin/Documents/Playground/dynatrace_mcp):
+
+- [app.py](/Users/nitin/Documents/Playground/dynatrace_mcp/app.py) for MCP handlers, retrieval, and CLI/demo flow
+- [diagnosis.py](/Users/nitin/Documents/Playground/dynatrace_mcp/diagnosis.py) for product-area and playbook diagnosis
+- [config.py](/Users/nitin/Documents/Playground/dynatrace_mcp/config.py) for constants and product profiles
+- [models.py](/Users/nitin/Documents/Playground/dynatrace_mcp/models.py) for shared data models
+- [playbooks.py](/Users/nitin/Documents/Playground/dynatrace_mcp/playbooks.py) for playbook loading
 
 ## Included Tools
 
@@ -68,6 +81,7 @@ This version implements a practical hybrid foundation:
 - ranking over URL, title, and extracted page text
 - product-area awareness across OneAgent, logs, extensions, DEM, Kubernetes, and API/authentication
 - local semantic-style reranking over cached docs and community pages using TF-IDF and fuzzy text similarity
+- a scored diagnosis engine that drives product-area detection, playbook matching, and retrieval focus
 
 ## Playbooks
 
@@ -99,6 +113,22 @@ To create or extend your own playbook:
 2. Set the `product_area`, `triggers`, and `keywords`
 3. Fill in `failure_domains`, `questions`, `evidence`, `mitigations`, and `escalate_when`
 4. Re-run the `--demo` commands to see the updated behavior
+
+## Evaluation
+
+Evaluation cases live in [eval_cases.json](/Users/nitin/Documents/Playground/eval_cases.json).
+
+Run the diagnosis/playbook evaluation with:
+
+```bash
+python3 eval.py
+```
+
+This gives you a baseline for:
+
+- product-area accuracy
+- concern-type coverage
+- playbook-hit rate
 
 ## Connector Architecture
 

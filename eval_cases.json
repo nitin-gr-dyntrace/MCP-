@@ -1,0 +1,72 @@
+[
+  {
+    "id": "oneagent_proxy",
+    "problem_statement": "Customer reports that OneAgent installation behind a proxy succeeds on some Linux hosts but fails on others after a recent network change. Data is missing from production hosts.",
+    "expected_product_area": "OneAgent",
+    "expected_concern_types": ["customer_environment_impact"],
+    "expected_playbook_ids": ["oneagent_proxy_install"]
+  },
+  {
+    "id": "activegate_certificate",
+    "problem_statement": "Customer reports that one ActiveGate in a network zone stopped forwarding data after a certificate update, while other ActiveGates still work normally.",
+    "expected_product_area": "ActiveGate",
+    "expected_concern_types": ["product_not_working"],
+    "expected_playbook_ids": ["activegate_connectivity_or_capacity"]
+  },
+  {
+    "id": "logs_pipeline",
+    "problem_statement": "Customer reports that after changes to log processing pipelines, important application logs are no longer visible in compliance dashboards. Production teams are impacted because they cannot confirm whether security events are still being collected.",
+    "expected_product_area": "Log Monitoring",
+    "expected_concern_types": ["product_not_working"],
+    "expected_playbook_ids": ["logs_pipeline_missing_data"]
+  },
+  {
+    "id": "extensions_activation",
+    "problem_statement": "Customer reports that an Extension 2.0 activation started failing after an upgrade. Metrics stopped appearing for production infrastructure.",
+    "expected_product_area": "Extensions",
+    "expected_concern_types": ["product_not_working"],
+    "expected_playbook_ids": ["extensions_activation_failure"]
+  },
+  {
+    "id": "dem_synthetic",
+    "problem_statement": "Customer reports that DEM synthetic browser monitors started failing after a frontend rollout, but real-user traffic is still being captured. Checkout journeys are affected.",
+    "expected_product_area": "DEM",
+    "expected_concern_types": ["customer_environment_impact"],
+    "expected_playbook_ids": ["dem_synthetic_after_rollout"]
+  },
+  {
+    "id": "dem_rum",
+    "problem_statement": "Customer reports that RUM data dropped sharply after a frontend deployment, and browser beacons appear to be missing for one application version.",
+    "expected_product_area": "DEM",
+    "expected_concern_types": ["product_not_working"],
+    "expected_playbook_ids": ["dem_rum_tag_or_capture_issue"]
+  },
+  {
+    "id": "k8s_namespaces",
+    "problem_statement": "Customer reports that after a Kubernetes cluster upgrade, Dynatrace stopped showing metrics and events for several namespaces, while other namespaces still report normally.",
+    "expected_product_area": "Kubernetes Monitoring",
+    "expected_concern_types": ["product_not_working"],
+    "expected_playbook_ids": ["kubernetes_namespace_visibility"]
+  },
+  {
+    "id": "api_token",
+    "problem_statement": "Customer reports that token-based automation against the Dynatrace API started failing after permission changes. Several production workflows are blocked.",
+    "expected_product_area": "API / Authentication",
+    "expected_concern_types": ["customer_environment_impact"],
+    "expected_playbook_ids": ["api_auth_token_failure"]
+  },
+  {
+    "id": "metrics_ingestion",
+    "problem_statement": "Customer reports that custom metrics sent by an internal service are no longer visible in dashboards after a schema update, even though the sender still reports success.",
+    "expected_product_area": "Metrics Ingestion",
+    "expected_concern_types": ["product_not_working"],
+    "expected_playbook_ids": ["metrics_ingestion_gap"]
+  },
+  {
+    "id": "davis_noise",
+    "problem_statement": "Customer reports that Davis started creating repeated problem alerts after a configuration rollout, but the underlying infrastructure appears healthy.",
+    "expected_product_area": "Davis / Alerting",
+    "expected_concern_types": ["product_not_working"],
+    "expected_playbook_ids": ["davis_problem_or_alert_noise"]
+  }
+]
