@@ -47,6 +47,18 @@ class Playbook:
 
 
 @dataclass
+class FailureMode:
+    id: str
+    title: str
+    summary: str
+    evidence: list[str]
+    questions: list[str]
+    mitigations: list[str]
+    escalate_when: list[str]
+    signals: list[str]
+
+
+@dataclass
 class Diagnosis:
     product_area: str
     product_confidence: float
@@ -54,5 +66,7 @@ class Diagnosis:
     severity: str
     matched_playbooks: list[Playbook]
     playbook_confidence: dict[str, float]
+    failure_modes: list[FailureMode]
+    failure_mode_confidence: dict[str, float]
     failure_domains: list[str]
     component_keywords: list[str]

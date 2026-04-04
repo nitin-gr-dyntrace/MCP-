@@ -939,6 +939,8 @@ def investigation_questions_from_diagnosis(problem_statement: str, diagnosis: Di
     profiles = [profile for profile in PRODUCT_AREA_PROFILES if profile["name"] == diagnosis.product_area]
     for profile in profiles[:1]:
         questions.extend(profile["questions"])
+    for failure_mode in diagnosis.failure_modes:
+        questions.extend(failure_mode.questions)
     for playbook in diagnosis.matched_playbooks:
         questions.extend(playbook.questions)
     if "possible_bug_for_engineering" in diagnosis.concern_types:
@@ -984,6 +986,8 @@ def evidence_checklist_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
     profiles = [profile for profile in PRODUCT_AREA_PROFILES if profile["name"] == diagnosis.product_area]
     for profile in profiles[:1]:
         evidence.extend(profile["evidence"])
+    for failure_mode in diagnosis.failure_modes:
+        evidence.extend(failure_mode.evidence)
     for playbook in diagnosis.matched_playbooks:
         evidence.extend(playbook.evidence)
     if "possible_bug_for_engineering" in diagnosis.concern_types:
@@ -1035,7 +1039,9 @@ def generate_hypotheses_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
         f"The issue may be caused by a configuration or prerequisite gap in {diagnosis.product_area}.",
         "The issue may align with a documented limitation or expected behavior that needs verification.",
     ]
-    hypotheses.extend([f"Likely failure domain: {domain}." for domain in diagnosis.failure_domains])
+    for failure_mode in diagnosis.failure_modes:
+        hypotheses.append(f"Most likely failure mode: {failure_mode.title}.")
+    hypotheses.extend([f"Likely failure domain: {domain.rstrip('.') }." for domain in diagnosis.failure_domains])
     if "product_not_working" in diagnosis.concern_types:
         hypotheses.append("A deployment, upgrade, or environmental change may have interrupted normal product behavior.")
     if "possible_bug_for_engineering" in diagnosis.concern_types:
@@ -1054,6 +1060,8 @@ def playbook_mitigations(problem_statement: str) -> list[str]:
 
 def playbook_mitigations_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
     mitigations: list[str] = []
+    for failure_mode in diagnosis.failure_modes:
+        mitigations.extend(failure_mode.mitigations)
     for playbook in diagnosis.matched_playbooks:
         mitigations.extend(playbook.mitigations)
     return list(dict.fromkeys(mitigations))[:5]
@@ -1068,6 +1076,8 @@ def escalation_criteria(problem_statement: str) -> list[str]:
 
 def escalation_criteria_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
     criteria: list[str] = []
+    for failure_mode in diagnosis.failure_modes:
+        criteria.extend(failure_mode.escalate_when)
     for playbook in diagnosis.matched_playbooks:
         criteria.extend(playbook.escalate_when)
     return list(dict.fromkeys(criteria))[:5]
@@ -1094,6 +1104,9 @@ def compare_results_by_source(results: list[SearchResult]) -> str:
 
 
 def customer_issue_explanation(diagnosis: Diagnosis) -> str:
+    if diagnosis.failure_modes:
+        primary = diagnosis.failure_modes[0].title.lower()
+        return f"Based on the current symptoms, this appears most consistent with {primary} in {diagnosis.product_area}."
     if diagnosis.matched_playbooks and diagnosis.failure_domains:
         primary = diagnosis.failure_domains[0].rstrip(".")
         return f"Based on the current symptoms, this appears most consistent with {primary.lower()} in {diagnosis.product_area}."
@@ -1145,6 +1158,10 @@ def build_triage_text(problem_statement: str, sources: list[str], max_results: i
     source_insight = compare_results_by_source(results)
     risk_items = [f"- {flag}" for flag in risks] if risks else ["- No elevated risk flags identified yet."]
     playbooks = diagnosis.matched_playbooks
+    failure_mode_items = [
+        f"- {failure_mode.title} ({diagnosis.failure_mode_confidence.get(failure_mode.id, 0.0):.2f})"
+        for failure_mode in diagnosis.failure_modes
+    ]
     mitigation_items = [f"- {item}" for item in playbook_mitigations_from_diagnosis(diagnosis)]
     escalation_items = [f"- {item}" for item in escalation_criteria_from_diagnosis(diagnosis)]
     customer_draft = build_customer_response_draft(problem_statement, diagnosis, results)
@@ -1158,6 +1175,9 @@ def build_triage_text(problem_statement: str, sources: list[str], max_results: i
             f"Estimated severity: {severity}",
             f"Matched playbooks: {', '.join(playbook.title for playbook in playbooks) if playbooks else 'None'}",
             f"Source insight: {source_insight}",
+            "",
+            "Top failure modes:",
+            *(failure_mode_items or ["- No strong failure modes inferred yet."]),
             "",
             "Working hypotheses:",
             *[f"- {hypothesis}" for hypothesis in hypotheses],
@@ -1204,6 +1224,7 @@ def build_bug_escalation_text(problem_statement: str, sources: list[str], max_re
             f"Component: {component}",
             f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
             f"Concern types: {', '.join(concern_types)}",
+            f"Top failure modes: {', '.join(mode.title for mode in diagnosis.failure_modes) if diagnosis.failure_modes else 'None'}",
             "",
             f"Problem summary: {problem_statement}",
             "Expected behavior: Dynatrace should continue to behave according to documented product behavior for this workflow.",
@@ -1258,6 +1279,7 @@ def build_investigation_plan_text(problem_statement: str, sources: list[str], ma
             f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
             f"Concern types: {', '.join(concern_types)}",
             f"Matched playbooks: {', '.join(playbook.title for playbook in playbooks) if playbooks else 'None'}",
+            f"Top failure modes: {', '.join(mode.title for mode in diagnosis.failure_modes) if diagnosis.failure_modes else 'None'}",
             "",
             "Ordered plan:",
             *[f"{index}. {step}" for index, step in enumerate(steps, start=1)],

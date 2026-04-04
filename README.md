@@ -24,6 +24,7 @@ Core modules now live under [dynatrace_mcp](/Users/nitin/Documents/Playground/dy
 
 - [app.py](/Users/nitin/Documents/Playground/dynatrace_mcp/app.py) for MCP handlers, retrieval, and CLI/demo flow
 - [diagnosis.py](/Users/nitin/Documents/Playground/dynatrace_mcp/diagnosis.py) for product-area and playbook diagnosis
+- [failure_modes.py](/Users/nitin/Documents/Playground/dynatrace_mcp/failure_modes.py) for generic failure-mode reasoning and evidence mapping
 - [config.py](/Users/nitin/Documents/Playground/dynatrace_mcp/config.py) for constants and product profiles
 - [models.py](/Users/nitin/Documents/Playground/dynatrace_mcp/models.py) for shared data models
 - [playbooks.py](/Users/nitin/Documents/Playground/dynatrace_mcp/playbooks.py) for playbook loading
@@ -82,6 +83,7 @@ This version implements a practical hybrid foundation:
 - product-area awareness across OneAgent, logs, extensions, DEM, Kubernetes, and API/authentication
 - local semantic-style reranking over cached docs and community pages using TF-IDF and fuzzy text similarity
 - a scored diagnosis engine that drives product-area detection, playbook matching, and retrieval focus
+- a generic failure-mode ontology that maps cases into likely causes, evidence asks, mitigations, and escalation thresholds
 
 ## Playbooks
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from .config import PRODUCT_AREA_PROFILES
+from .failure_modes import infer_failure_modes
 from .models import Diagnosis, Playbook
 from .playbooks import load_playbooks
 
@@ -143,8 +144,11 @@ def diagnose_problem(problem_statement: str) -> Diagnosis:
         for playbook in matched_playbooks_for_area(problem_statement, product_area)
         if playbook_confidence.get(playbook.id, 0.0) >= 0.45
     ]
+    failure_modes, failure_mode_confidence = infer_failure_modes(problem_statement, product_area, playbooks)
 
     failure_domains: list[str] = []
+    for failure_mode in failure_modes:
+        failure_domains.append(failure_mode.summary)
     if playbooks:
         for playbook in playbooks:
             failure_domains.extend(playbook.failure_domains)
@@ -182,6 +186,8 @@ def diagnose_problem(problem_statement: str) -> Diagnosis:
     for playbook in playbooks:
         keywords.extend(playbook.triggers)
         keywords.extend(playbook.keywords)
+    for failure_mode in failure_modes:
+        keywords.extend(failure_mode.signals)
 
     product_confidence = min(0.98, 0.3 + (top_score / 30.0))
 
@@ -192,6 +198,8 @@ def diagnose_problem(problem_statement: str) -> Diagnosis:
         severity=severity,
         matched_playbooks=playbooks,
         playbook_confidence=playbook_confidence,
+        failure_modes=failure_modes,
+        failure_mode_confidence=failure_mode_confidence,
         failure_domains=failure_domains[:6],
         component_keywords=list(dict.fromkeys(keywords))[:20],
     )
