@@ -62,29 +62,6 @@ Core modules now live under [dynatrace_mcp](/Users/nitin/Documents/Playground/dy
 10. `list_connectors`
    Shows which connectors are live now and which are scaffolded for later integration.
 
-## Why Python Here
-
-Python keeps this version simple:
-
-- no Node.js packages are required
-- easier to read and extend for internal support workflows
-- easier to run from most MCP clients with a single command
-
-## Semantic Search Direction
-
-Yes, semantic search is a strong fit for this MCP.
-
-This version implements a practical hybrid foundation:
-
-- sitemap discovery from Dynatrace-owned sources
-- local corpus caching in `.cache/dynatrace_corpus.json`
-- support-aware term expansion such as `oneagent`, `installation`, `kubernetes`, and impact keywords
-- ranking over URL, title, and extracted page text
-- product-area awareness across OneAgent, logs, extensions, DEM, Kubernetes, and API/authentication
-- local semantic-style reranking over cached docs and community pages using TF-IDF and fuzzy text similarity
-- a scored diagnosis engine that drives product-area detection, playbook matching, and retrieval focus
-- a generic failure-mode ontology that maps cases into likely causes, evidence asks, mitigations, and escalation thresholds
-
 ## Playbooks
 
 Support playbooks live in [playbooks.json](/Users/nitin/Documents/Playground/playbooks.json).
