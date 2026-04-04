@@ -1,0 +1,347 @@
+[
+  {
+    "id": "oneagent_proxy_install",
+    "product_area": "OneAgent",
+    "title": "OneAgent installation behind proxy",
+    "triggers": ["oneagent", "proxy", "installation", "install", "linux", "host"],
+    "keywords": ["proxy", "firewall", "routing", "ssl inspection", "certificate", "installer", "connectivity"],
+    "failure_domains": [
+      "Proxy configuration mismatch across hosts",
+      "Firewall or routing differences after network changes",
+      "TLS inspection, certificate trust, or proxy authentication issues"
+    ],
+    "questions": [
+      "What differs between working and failing hosts in proxy configuration or installer parameters?",
+      "What exact installer error appears on the failing hosts?",
+      "Can failing hosts resolve and reach the Dynatrace environment endpoint through the proxy?",
+      "Did the recent network change affect only specific subnets, VLANs, or security groups?"
+    ],
+    "evidence": [
+      "OneAgent installer logs from working and failing hosts",
+      "Output of env | grep -i proxy on affected hosts",
+      "curl -v or openssl connectivity test to Dynatrace endpoints through the proxy",
+      "Firewall, routing, and DNS comparison between working and failing hosts"
+    ],
+    "mitigations": [
+      "Set the proxy explicitly during installation and verify no conflicting proxy settings exist",
+      "Use a known-good host as a baseline and compare network and installer parameters",
+      "Temporarily bypass the proxy if policy allows to isolate the failure domain"
+    ],
+    "escalate_when": [
+      "Connectivity, proxy, and certificate checks are clean but the installer still fails reproducibly",
+      "The same failure occurs across multiple environments with identical validated configuration"
+    ]
+  },
+  {
+    "id": "oneagent_missing_data_after_upgrade",
+    "product_area": "OneAgent",
+    "title": "OneAgent upgrade followed by missing host or process data",
+    "triggers": ["oneagent", "upgrade", "missing data", "not sending", "stopped", "host"],
+    "keywords": ["upgrade", "version", "rollback", "service", "restart", "communication"],
+    "failure_domains": [
+      "OneAgent service or module restart issue after upgrade",
+      "Version compatibility or rollback mismatch",
+      "Communication interruption between host and Dynatrace environment"
+    ],
+    "questions": [
+      "Did the issue begin immediately after the upgrade or after a later host change?",
+      "Is host monitoring affected, process monitoring affected, or both?",
+      "Were there any rollback attempts or partial upgrades on the impacted hosts?"
+    ],
+    "evidence": [
+      "Pre-upgrade and post-upgrade versions",
+      "OneAgent service status and relevant logs",
+      "Affected host list and scope of missing telemetry"
+    ],
+    "mitigations": [
+      "Verify agent service health and restart if appropriate",
+      "Compare the affected hosts against unaffected hosts on the same version",
+      "Rollback only after evidence is collected and change control allows it"
+    ],
+    "escalate_when": [
+      "Validated supported upgrade path still causes reproducible loss of telemetry",
+      "Multiple customers or environments show the same post-upgrade regression pattern"
+    ]
+  },
+  {
+    "id": "activegate_connectivity_or_capacity",
+    "product_area": "ActiveGate",
+    "title": "ActiveGate connectivity, routing, or capacity issue",
+    "triggers": ["activegate", "gateway", "routing", "connection", "network zone"],
+    "keywords": ["network zone", "outbound", "certificate", "proxy", "capacity", "queue"],
+    "failure_domains": [
+      "Network path or proxy issue between ActiveGate and Dynatrace",
+      "Certificate or trust issue",
+      "ActiveGate sizing, queueing, or resource saturation"
+    ],
+    "questions": [
+      "Is the issue isolated to one ActiveGate or all ActiveGates in the network zone?",
+      "Have there been changes to certificates, proxies, or network zone routing?",
+      "Are resource utilization or queue metrics elevated on the impacted ActiveGate?"
+    ],
+    "evidence": [
+      "ActiveGate logs and version",
+      "Network zone and proxy configuration",
+      "CPU, memory, and queue or backlog indicators"
+    ],
+    "mitigations": [
+      "Verify outbound connectivity and certificate chain",
+      "Shift traffic or reduce load if one ActiveGate is saturated",
+      "Compare behavior across ActiveGates in the same topology"
+    ],
+    "escalate_when": [
+      "Validated network and resource conditions are healthy but failures persist",
+      "A reproducible regression appears tied to a version change"
+    ]
+  },
+  {
+    "id": "logs_pipeline_missing_data",
+    "product_area": "Log Monitoring",
+    "title": "Logs missing after pipeline or processing change",
+    "triggers": ["logs", "log", "pipeline", "missing data", "dropped", "dashboards", "compliance"],
+    "keywords": ["processing", "parsing", "grail", "query", "retention", "ingest"],
+    "failure_domains": [
+      "Pipeline rules or processors are dropping or transforming records unexpectedly",
+      "Logs are ingested but no longer match dashboard or query assumptions",
+      "Retention, routing, or ingest path changed with the pipeline update"
+    ],
+    "questions": [
+      "Are the logs missing at ingest, missing after processing, or only missing in dashboards and queries?",
+      "What pipeline or processing rule changes were made before the issue began?",
+      "Can raw sample log lines still be found before transformations are applied?",
+      "Did field names, parsing logic, or retention rules change?"
+    ],
+    "evidence": [
+      "Sample raw log lines and expected output fields",
+      "Pipeline configuration before and after the change",
+      "Representative DQL or dashboard queries that stopped working",
+      "Timestamp range where the gap started"
+    ],
+    "mitigations": [
+      "Roll back or disable the recent pipeline change if operationally safe",
+      "Test raw ingest visibility separately from processed-query visibility",
+      "Validate whether dashboards depend on fields renamed by the pipeline"
+    ],
+    "escalate_when": [
+      "A validated supported pipeline configuration still drops data unexpectedly",
+      "The issue persists with a minimal reproducible pipeline configuration"
+    ]
+  },
+  {
+    "id": "extensions_activation_failure",
+    "product_area": "Extensions",
+    "title": "Extension activation or runtime failure",
+    "triggers": ["extension", "extensions", "activation", "upgrade", "metrics stopped", "extension 2.0"],
+    "keywords": ["activation", "compatibility", "runtime", "plugin", "endpoint", "permissions"],
+    "failure_domains": [
+      "Extension version compatibility or runtime requirement mismatch",
+      "Credential, permission, or endpoint connectivity problem",
+      "Activation pipeline failure after platform or extension upgrade"
+    ],
+    "questions": [
+      "Did the failure start after a platform upgrade, extension upgrade, or target system change?",
+      "Is the issue during activation, data collection, or only metric display?",
+      "Does the extension fail in all environments or only one?"
+    ],
+    "evidence": [
+      "Extension name, version, and activation logs",
+      "Target endpoint connectivity and authentication details",
+      "Platform version and upgrade timeline"
+    ],
+    "mitigations": [
+      "Validate extension compatibility and runtime prerequisites",
+      "Re-test with known-good credentials and endpoint connectivity",
+      "Roll back the extension version if supported and safe"
+    ],
+    "escalate_when": [
+      "Activation fails on supported versions with validated prerequisites",
+      "A reproducible regression appears only after a specific upgrade"
+    ]
+  },
+  {
+    "id": "dem_synthetic_after_rollout",
+    "product_area": "DEM",
+    "title": "Synthetic failures after frontend or application rollout",
+    "triggers": ["dem", "synthetic", "browser monitor", "frontend rollout", "checkout", "user journey"],
+    "keywords": ["clickpath", "dom", "selector", "network call", "script", "tag"],
+    "failure_domains": [
+      "Synthetic monitor steps or selectors no longer match the updated application",
+      "The rollout changed network behavior or authentication flows used by the monitor",
+      "A monitor configuration or environment issue was exposed by the rollout"
+    ],
+    "questions": [
+      "Did the rollout change page structure, selectors, authentication, or API calls?",
+      "Are synthetic failures isolated to one location or all locations?",
+      "Does RUM still show successful real-user traffic for the same path?"
+    ],
+    "evidence": [
+      "Monitor execution details and screenshots",
+      "HAR or failing step traces",
+      "Deployment timeline and application changes"
+    ],
+    "mitigations": [
+      "Update monitor selectors or step logic if the application flow changed",
+      "Compare failing synthetic requests with real-user traffic",
+      "Temporarily reduce alert noise if the issue is clearly monitor-definition drift"
+    ],
+    "escalate_when": [
+      "A validated monitor fails on stable application behavior across locations",
+      "Platform-side monitor execution errors persist without app-side cause"
+    ]
+  },
+  {
+    "id": "dem_rum_tag_or_capture_issue",
+    "product_area": "DEM",
+    "title": "RUM capture, tagging, or frontend instrumentation issue",
+    "triggers": ["rum", "tag", "javascript", "beacon", "user session", "frontend"],
+    "keywords": ["snippet", "beacon", "csp", "tag placement", "spa", "navigation"],
+    "failure_domains": [
+      "RUM JavaScript tag changed or is no longer loaded correctly",
+      "CSP, ad blockers, or frontend bundling changes interfere with beacons",
+      "Application navigation model changed and instrumentation assumptions no longer hold"
+    ],
+    "questions": [
+      "Was the RUM snippet changed, relocated, or removed during deployment?",
+      "Are beacons blocked by CSP, browser policies, or frontend build changes?",
+      "Is the issue limited to one application version or browser segment?"
+    ],
+    "evidence": [
+      "Rendered page source showing the RUM tag",
+      "Browser network traces for beacon requests",
+      "CSP or frontend deployment changes"
+    ],
+    "mitigations": [
+      "Validate snippet placement and loading order",
+      "Check CSP and browser console/network errors",
+      "Compare affected and unaffected application versions"
+    ],
+    "escalate_when": [
+      "Validated snippet and network behavior still produce missing capture",
+      "A platform-side capture regression is reproducible across browsers"
+    ]
+  },
+  {
+    "id": "kubernetes_namespace_visibility",
+    "product_area": "Kubernetes Monitoring",
+    "title": "Missing Kubernetes metrics or events after cluster or operator change",
+    "triggers": ["kubernetes", "cluster upgrade", "namespace", "operator", "helm", "daemonset"],
+    "keywords": ["rbac", "operator", "helm", "openshift", "namespace", "policy"],
+    "failure_domains": [
+      "Operator, Helm, or DaemonSet configuration drift after cluster change",
+      "RBAC or policy constraints block data collection in some namespaces",
+      "Cluster upgrade changed APIs, permissions, or webhook behavior"
+    ],
+    "questions": [
+      "Which namespaces are affected and what is common about them?",
+      "Did the operator, Helm chart, RBAC, or cluster policies change during the upgrade?",
+      "Are pod logs or admission events showing permission or injection failures?"
+    ],
+    "evidence": [
+      "Cluster and operator or Helm versions",
+      "Affected namespaces and pod-level symptoms",
+      "RBAC and policy changes around the time of the issue"
+    ],
+    "mitigations": [
+      "Validate operator and DaemonSet health",
+      "Compare affected namespaces with working namespaces for RBAC and policy differences",
+      "Reconcile deployment manifests if drift is detected"
+    ],
+    "escalate_when": [
+      "Supported cluster and operator combinations still fail reproducibly",
+      "The issue persists after validating RBAC, policies, and deployment health"
+    ]
+  },
+  {
+    "id": "api_auth_token_failure",
+    "product_area": "API / Authentication",
+    "title": "API token, scope, or authentication failure",
+    "triggers": ["api", "token", "permission", "authentication", "authorization", "workflow"],
+    "keywords": ["scope", "oauth", "403", "401", "expired", "permission"],
+    "failure_domains": [
+      "Token scopes or permissions no longer satisfy the workflow",
+      "Credentials rotated, expired, or are used against the wrong endpoint",
+      "Authentication flow or policy changed after administrative updates"
+    ],
+    "questions": [
+      "Which API endpoint and exact HTTP status code are failing?",
+      "Did token scopes, ownership, or permission policies change recently?",
+      "Is the issue limited to one token or all automation using the same auth path?"
+    ],
+    "evidence": [
+      "Endpoint URLs and HTTP status codes",
+      "Token type, scope set, and expiry details",
+      "Recent permission or policy changes"
+    ],
+    "mitigations": [
+      "Validate token scopes against the failing API calls",
+      "Re-test with a known-good token or service account",
+      "Confirm the automation is targeting the correct environment and endpoint"
+    ],
+    "escalate_when": [
+      "Supported auth flows fail with validated scopes and endpoints",
+      "The failure began after a platform change without customer-side auth changes"
+    ]
+  },
+  {
+    "id": "metrics_ingestion_gap",
+    "product_area": "Metrics Ingestion",
+    "title": "Missing custom or ingested metrics",
+    "triggers": ["metrics", "metric", "timeseries", "ingestion", "missing charts"],
+    "keywords": ["metric api", "cardinality", "quota", "dimension", "timeseries"],
+    "failure_domains": [
+      "Metrics are no longer sent or are rejected by the ingest path",
+      "Metric dimensions or names changed and dashboards no longer match",
+      "Quota, cardinality, or schema issues affect visibility"
+    ],
+    "questions": [
+      "Did the sender, schema, or dimensions change before the issue started?",
+      "Are metrics absent at ingest or only absent in charts and alerting?",
+      "Did volume or cardinality change significantly?"
+    ],
+    "evidence": [
+      "Sample metric payloads",
+      "Metric selector or query definitions",
+      "Timeline of schema or sender changes"
+    ],
+    "mitigations": [
+      "Validate payload schema and dimensions",
+      "Compare raw ingest success with dashboard selector behavior",
+      "Check whether dashboards rely on dimensions that changed"
+    ],
+    "escalate_when": [
+      "Supported metric ingestion fails with validated payloads",
+      "The platform rejects or hides valid metrics reproducibly"
+    ]
+  },
+  {
+    "id": "davis_problem_or_alert_noise",
+    "product_area": "Davis / Alerting",
+    "title": "Unexpected Davis problem detection or alerting behavior",
+    "triggers": ["davis", "problem", "alert", "alerting", "anomaly", "noise"],
+    "keywords": ["threshold", "event", "problem card", "root cause", "correlation"],
+    "failure_domains": [
+      "Configuration or threshold change altered alert behavior",
+      "Entity relationships or telemetry gaps changed Davis correlation outcomes",
+      "A recent rollout changed the symptom pattern presented to Davis"
+    ],
+    "questions": [
+      "Did thresholds, event settings, or problem notification rules change recently?",
+      "Is the issue false positives, missed alerts, or incorrect root-cause grouping?",
+      "Did telemetry quality or entity relationships change before the problem started?"
+    ],
+    "evidence": [
+      "Problem IDs and timestamps",
+      "Relevant alerting or event configuration",
+      "Examples of expected versus observed Davis behavior"
+    ],
+    "mitigations": [
+      "Review recent configuration changes and threshold tuning",
+      "Validate the underlying telemetry quality feeding Davis",
+      "Temporarily adjust noise-producing alerts if customer impact requires it"
+    ],
+    "escalate_when": [
+      "Documented configuration and telemetry are correct but correlation remains incorrect",
+      "A reproducible Davis regression appears after a version or platform change"
+    ]
+  }
+]
