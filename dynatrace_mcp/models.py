@@ -62,6 +62,8 @@ class FailureMode:
 class Diagnosis:
     product_area: str
     product_confidence: float
+    subdomain: str
+    subdomain_confidence: float
     concern_types: list[str]
     severity: str
     matched_playbooks: list[Playbook]
@@ -70,3 +72,4 @@ class Diagnosis:
     failure_mode_confidence: dict[str, float]
     failure_domains: list[str]
     component_keywords: list[str]
+    entity_signals: list[str]

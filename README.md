@@ -196,6 +196,29 @@ Search across all configured connectors:
 python3 server.py --demo search-all "oneagent installation" --connectors docs community jira slack stackoverflow --max-results 6
 ```
 
+## Validation UI
+
+For teammates who do not want to use CLI commands, there is now a lightweight local UI in [ui.py](/Users/nitin/Documents/Playground/ui.py).
+
+Run it with:
+
+```bash
+python3 ui.py
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8765
+```
+
+The UI is intentionally simple:
+
+- paste a customer case
+- choose `Triage`, `Investigation Plan`, or `Customer Response`
+- choose `docs` and `community`
+- review the MCP output in the browser
+
 List connector readiness:
 
 ```bash

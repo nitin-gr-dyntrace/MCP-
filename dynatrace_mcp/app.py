@@ -11,7 +11,7 @@ from collections import Counter
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import unquote, urlparse
 from urllib.error import URLError
 from urllib.request import Request, build_opener, getproxies, ProxyHandler
 from xml.etree import ElementTree
@@ -25,7 +25,7 @@ from .config import (
     SUPPORT_SYNONYMS,
     configured_allowed_hosts,
 )
-from .diagnosis import classify_concern, diagnose_problem, identify_component, matched_product_profiles
+from .diagnosis import classify_concern, diagnose_problem, matched_product_profiles
 from .models import ConnectorDocument, CorpusEntry, Diagnosis, SearchResult
 
 
@@ -358,6 +358,55 @@ def score_url_for_query(url: str, query: str) -> int:
     return score
 
 
+def diagnosis_url_bias(url: str, diagnosis: Diagnosis | None) -> float:
+    if diagnosis is None:
+        return 0.0
+
+    path = unquote(url).lower()
+    score = 0.0
+
+    for keyword in diagnosis.component_keywords[:12]:
+        keyword = keyword.lower()
+        if keyword in path:
+            score += 5.0 if " " in keyword else 2.5
+
+    subdomain = diagnosis.subdomain.lower()
+    if subdomain in path:
+        score += 10.0
+
+    if diagnosis.product_area == "DEM":
+        if diagnosis.subdomain == "RUM Capture":
+            if any(token in path for token in ["rum", "user-session", "user-session", "user-experience", "frontend", "javascript"]):
+                score += 22.0
+            if any(token in path for token in ["synthetic", "clickpath", "extension", "logs", "dashboard"]):
+                score -= 16.0
+        elif diagnosis.subdomain == "Synthetic Monitoring":
+            if any(token in path for token in ["synthetic", "browser-monitor", "clickpath"]):
+                score += 22.0
+            if any(token in path for token in ["rum", "user-session", "beacon"]):
+                score -= 16.0
+    elif diagnosis.product_area == "Davis / Alerting":
+        if any(token in path for token in ["davis", "alert", "problem"]):
+            score += 18.0
+        if diagnosis.subdomain == "Alerting Profiles":
+            if any(token in path for token in ["alerting-profile", "notification", "problem-notifications", "alerting"]):
+                score += 24.0
+            if any(token in path for token in ["dashboard", "visualization", "logs", "metrics"]):
+                score -= 18.0
+    elif diagnosis.product_area == "Log Monitoring":
+        if any(token in path for token in ["log-monitoring", "logs", "grail", "pipeline", "ingest"]):
+            score += 18.0
+        if any(token in path for token in ["synthetic", "alerting", "activegate"]):
+            score -= 14.0
+    elif diagnosis.product_area == "Metrics Ingestion":
+        if any(token in path for token in ["metrics", "metric", "timeseries", "selector", "ingest"]):
+            score += 18.0
+        if any(token in path for token in ["synthetic", "alerting", "log-monitoring"]):
+            score -= 14.0
+
+    return score
+
+
 def score_entry_for_query(entry: CorpusEntry, query: str) -> float:
     title_terms = Counter(tokenize(entry.title))
     excerpt_terms = Counter(tokenize(entry.excerpt))
@@ -418,7 +467,7 @@ def rank_cached_entries(query: str, sources: list[str], max_results: int, diagno
 def search_source(query: str, source: str, max_results: int, diagnosis: Diagnosis | None = None) -> list[SearchResult]:
     sitemap_urls = fetch_sitemap_urls(source)
     ranked = sorted(
-        ((score_url_for_query(url, query), url) for url in sitemap_urls),
+        ((score_url_for_query(url, query) + diagnosis_url_bias(url, diagnosis), url) for url in sitemap_urls),
         key=lambda item: item[0],
         reverse=True,
     )
@@ -470,11 +519,14 @@ def retrieval_query(problem_statement: str, diagnosis: Diagnosis | None) -> str:
     if diagnosis is None:
         return problem_statement
 
-    focused_terms = diagnosis.component_keywords[:6]
+    focused_terms = diagnosis.component_keywords[:8]
     if not focused_terms:
         return problem_statement
 
-    return f"{problem_statement} {' '.join(focused_terms)}"
+    additions = [diagnosis.subdomain]
+    additions.extend(diagnosis.entity_signals[:4])
+    additions.extend(focused_terms)
+    return f"{problem_statement} {' '.join(additions)}"
 
 
 def diagnosis_alignment_score(entry: CorpusEntry, diagnosis: Diagnosis | None) -> float:
@@ -484,9 +536,26 @@ def diagnosis_alignment_score(entry: CorpusEntry, diagnosis: Diagnosis | None) -
     feature_text = entry_feature_text(entry).lower()
     score = 0.0
 
-    for keyword in diagnosis.component_keywords[:10]:
+    for keyword in diagnosis.component_keywords[:12]:
         if keyword.lower() in feature_text:
             score += 3.0 if " " in keyword else 1.5
+
+    if diagnosis.subdomain and diagnosis.subdomain.lower() in feature_text:
+        score += 9.0
+
+    for signal in diagnosis.entity_signals:
+        signal_text = signal.replace("_", " ")
+        if signal_text in feature_text:
+            score += 6.0
+
+    if diagnosis.product_area == "Davis / Alerting" and any(
+        token in feature_text for token in ["dashboard", "visualization", "query", "selector"]
+    ):
+        score -= 16.0
+    if diagnosis.product_area == "DEM" and any(
+        token in feature_text for token in ["log monitoring", "oneagent", "extension", "sql extension"]
+    ):
+        score -= 14.0
 
     if diagnosis.product_area == "ActiveGate":
         if "activegate" in feature_text or "network zone" in feature_text:
@@ -513,6 +582,35 @@ def diagnosis_alignment_score(entry: CorpusEntry, diagnosis: Diagnosis | None) -
             score += 12.0
         if any(token in feature_text for token in ["extension", "log monitoring", "oneagent"]):
             score -= 10.0
+        if diagnosis.subdomain == "RUM Capture":
+            if any(token in feature_text for token in ["rum", "real user monitoring", "beacon", "javascript", "user session"]):
+                score += 18.0
+            if any(token in feature_text for token in ["synthetic", "browser monitor", "clickpath"]):
+                score -= 12.0
+        elif diagnosis.subdomain == "Synthetic Monitoring":
+            if any(token in feature_text for token in ["synthetic", "browser monitor", "clickpath", "location"]):
+                score += 18.0
+            if any(token in feature_text for token in ["rum", "user session", "beacon"]):
+                score -= 12.0
+    elif diagnosis.product_area == "Davis / Alerting":
+        if any(token in feature_text for token in ["alert", "alerting profile", "notification", "problem", "davis"]):
+            score += 14.0
+        if diagnosis.subdomain == "Alerting Profiles":
+            if any(token in feature_text for token in ["alerting profile", "notification", "email", "webhook", "slack"]):
+                score += 18.0
+            if any(token in feature_text for token in ["visualization", "query", "chart", "dashboard"]):
+                score -= 15.0
+    elif diagnosis.product_area in {"Log Monitoring", "Metrics Ingestion"}:
+        if any(token in feature_text for token in ["log monitoring", "logs", "grail", "metric", "timeseries", "selector", "dashboard"]):
+            score += 10.0
+        if diagnosis.subdomain in {"Log Ingestion Pipeline", "Metric Ingestion"} and any(
+            token in feature_text for token in ["pipeline", "ingest", "processing", "schema", "dimension", "payload"]
+        ):
+            score += 16.0
+        if diagnosis.subdomain in {"Dashboard and Query", "Dashboard and Selector"} and any(
+            token in feature_text for token in ["dashboard", "query", "selector", "visualization", "chart"]
+        ):
+            score += 16.0
 
     return score
 
@@ -871,12 +969,110 @@ def build_connector_registry() -> dict[str, BaseConnector]:
 
 CONNECTORS = build_connector_registry()
 
+ENTITY_QUESTION_HINTS = {
+    "frontend_deployment": [
+        "Did the new frontend version change script injection, routing, or page composition?",
+    ],
+    "rum_snippet": [
+        "Is the Dynatrace RUM snippet still present and loaded correctly in the affected pages?",
+    ],
+    "browser_csp": [
+        "Do browser console, network traces, or CSP headers show blocked Dynatrace scripts or beacon calls?",
+    ],
+    "alerting_profile": [
+        "Which alerting profile is assigned to the affected problems, and which notification integration should receive them?",
+    ],
+    "profile_filters": [
+        "Do management zones, severity filters, or tags now exclude the expected notifications?",
+    ],
+    "log_pipeline": [
+        "Can you confirm whether the data gap starts at ingest, processing, or only in the final dashboards?",
+    ],
+    "metric_schema": [
+        "Did metric dimensions, selectors, or payload schema change before the dashboards broke?",
+    ],
+    "extension_runtime": [
+        "Which controller or execution logs show the extension becoming unhealthy after activation?",
+    ],
+}
+
+ENTITY_EVIDENCE_HINTS = {
+    "frontend_deployment": [
+        "Old versus new frontend deployment details and release timing",
+    ],
+    "rum_snippet": [
+        "Rendered page source confirming whether the Dynatrace RUM snippet is present",
+        "Browser network traces for Dynatrace beacon requests",
+    ],
+    "browser_csp": [
+        "Browser console errors and Content-Security-Policy headers from the affected application",
+        "HAR capture from an affected user flow",
+    ],
+    "alerting_profile": [
+        "Assigned alerting profile and linked notification integration for an affected problem",
+        "Notification test results or delivery logs for the configured channel",
+    ],
+    "profile_filters": [
+        "Alerting profile filters such as management zones, tags, and severity rules",
+    ],
+    "log_pipeline": [
+        "Pipeline configuration before and after the change",
+        "Sample raw logs before and after processing",
+    ],
+    "metric_schema": [
+        "Metric payload samples, selectors, and dimension changes before versus after the schema change",
+    ],
+    "extension_runtime": [
+        "Extension controller, execution, and ActiveGate runtime logs around the failure window",
+    ],
+}
+
+ENTITY_MITIGATION_HINTS = {
+    "rum_snippet": [
+        "Re-validate RUM snippet injection and compare with a known-good page build",
+    ],
+    "browser_csp": [
+        "Test whether CSP or browser-side blocking is preventing Dynatrace scripts or beacons",
+    ],
+    "alerting_profile": [
+        "Temporarily broaden alerting-profile filters or re-link the expected notification integration for validation",
+    ],
+    "log_pipeline": [
+        "Compare raw ingest success with processed-query visibility before changing dashboards",
+    ],
+    "metric_schema": [
+        "Validate whether dashboards still target the current metric names and dimensions",
+    ],
+}
+
+
+def entity_questions_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
+    questions: list[str] = []
+    for signal in diagnosis.entity_signals:
+        questions.extend(ENTITY_QUESTION_HINTS.get(signal, []))
+    return list(dict.fromkeys(questions))
+
+
+def entity_evidence_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
+    evidence: list[str] = []
+    for signal in diagnosis.entity_signals:
+        evidence.extend(ENTITY_EVIDENCE_HINTS.get(signal, []))
+    return list(dict.fromkeys(evidence))
+
+
+def entity_mitigations_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
+    mitigations: list[str] = []
+    for signal in diagnosis.entity_signals:
+        mitigations.extend(ENTITY_MITIGATION_HINTS.get(signal, []))
+    return list(dict.fromkeys(mitigations))
+
 def investigation_questions_from_diagnosis(problem_statement: str, diagnosis: Diagnosis) -> list[str]:
     questions = [
         "What changed just before the issue started, such as configuration, rollout, upgrade, or network changes?",
         "What is the exact scope of impact: one host, one cluster, one tenant, or all environments?",
         "Can the customer share timestamps, screenshots, logs, and exact error messages?",
     ]
+    questions.extend(entity_questions_from_diagnosis(diagnosis))
     profiles = [profile for profile in PRODUCT_AREA_PROFILES if profile["name"] == diagnosis.product_area]
     for profile in profiles[:1]:
         questions.extend(profile["questions"])
@@ -908,6 +1104,7 @@ def evidence_checklist_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
         "Exact error text, screenshots, and affected entity identifiers",
         "Recent changes before impact started",
     ]
+    evidence.extend(entity_evidence_from_diagnosis(diagnosis))
     profiles = [profile for profile in PRODUCT_AREA_PROFILES if profile["name"] == diagnosis.product_area]
     for profile in profiles[:1]:
         evidence.extend(profile["evidence"])
@@ -934,6 +1131,7 @@ def generate_hypotheses_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
     hypotheses = [
         f"The issue may be caused by a configuration or prerequisite gap in {diagnosis.product_area}.",
         "The issue may align with a documented limitation or expected behavior that needs verification.",
+        f"The strongest diagnostic lane currently points to {diagnosis.subdomain} within {diagnosis.product_area}.",
     ]
     for failure_mode in diagnosis.failure_modes:
         hypotheses.append(f"Most likely failure mode: {failure_mode.title}.")
@@ -948,6 +1146,7 @@ def generate_hypotheses_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
 
 def playbook_mitigations_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
     mitigations: list[str] = []
+    mitigations.extend(entity_mitigations_from_diagnosis(diagnosis))
     for failure_mode in diagnosis.failure_modes:
         mitigations.extend(failure_mode.mitigations)
     for playbook in diagnosis.matched_playbooks:
@@ -1044,6 +1243,7 @@ def build_triage_text(problem_statement: str, sources: list[str], max_results: i
             f"Concern types: {', '.join(concern_types)}",
             f"Likely component: {component}",
             f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
+            f"Likely subdomain: {diagnosis.subdomain} ({diagnosis.subdomain_confidence:.2f})",
             f"Estimated severity: {severity}",
             f"Matched playbooks: {', '.join(playbook.title for playbook in playbooks) if playbooks else 'None'}",
             f"Source insight: {source_insight}",
@@ -1095,6 +1295,7 @@ def build_bug_escalation_text(problem_statement: str, sources: list[str], max_re
             "Engineering escalation draft",
             f"Component: {component}",
             f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
+            f"Likely subdomain: {diagnosis.subdomain} ({diagnosis.subdomain_confidence:.2f})",
             f"Concern types: {', '.join(concern_types)}",
             f"Top failure modes: {', '.join(mode.title for mode in diagnosis.failure_modes) if diagnosis.failure_modes else 'None'}",
             "",
@@ -1149,6 +1350,7 @@ def build_investigation_plan_text(problem_statement: str, sources: list[str], ma
             "Investigation plan",
             f"Likely component: {component}",
             f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
+            f"Likely subdomain: {diagnosis.subdomain} ({diagnosis.subdomain_confidence:.2f})",
             f"Concern types: {', '.join(concern_types)}",
             f"Matched playbooks: {', '.join(playbook.title for playbook in playbooks) if playbooks else 'None'}",
             f"Top failure modes: {', '.join(mode.title for mode in diagnosis.failure_modes) if diagnosis.failure_modes else 'None'}",

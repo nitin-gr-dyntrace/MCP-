@@ -8,6 +8,42 @@ from .models import Diagnosis, Playbook
 from .playbooks import load_playbooks
 
 
+SUBDOMAIN_RULES: dict[str, list[dict[str, object]]] = {
+    "DEM": [
+        {"name": "RUM Capture", "keywords": ["user session", "rum", "beacon", "snippet", "javascript", "waterfall", "action", "frontend", "browser", "csp", "spa", "route"]},
+        {"name": "Synthetic Monitoring", "keywords": ["synthetic", "browser monitor", "clickpath", "monitor", "location", "step", "availability"]},
+    ],
+    "Davis / Alerting": [
+        {"name": "Alerting Profiles", "keywords": ["alerting profile", "notification", "on-call", "routing", "delivery", "email", "slack", "webhook", "profile", "notify"]},
+        {"name": "Problem Detection", "keywords": ["problem", "root cause", "anomaly", "davis", "false positive", "noise", "correlation"]},
+    ],
+    "Log Monitoring": [
+        {"name": "Log Ingestion Pipeline", "keywords": ["log", "pipeline", "ingest", "processing", "parser", "grail", "dql"]},
+        {"name": "Dashboard and Query", "keywords": ["dashboard", "query", "field", "selector", "visualization"]},
+    ],
+    "Metrics Ingestion": [
+        {"name": "Metric Ingestion", "keywords": ["metric", "timeseries", "payload", "dimension", "schema", "cardinality"]},
+        {"name": "Dashboard and Selector", "keywords": ["dashboard", "chart", "selector", "visualization", "query"]},
+    ],
+    "Extensions": [
+        {"name": "Extension Runtime", "keywords": ["extension", "activation", "runtime", "controller", "plugin", "unhealthy"]},
+        {"name": "Extension Compatibility", "keywords": ["upgrade", "version", "compatibility", "supported"]},
+    ],
+}
+
+
+ENTITY_SIGNAL_RULES: list[tuple[str, list[str]]] = [
+    ("frontend_deployment", ["frontend deployment", "frontend rollout", "deployment", "new version", "build"]),
+    ("rum_snippet", ["snippet", "javascript", "rum", "beacon", "auto-injection", "manual injection"]),
+    ("browser_csp", ["csp", "content-security-policy", "blocked script", "console", "har", "network tab"]),
+    ("alerting_profile", ["alerting profile", "notification", "notify", "webhook", "email", "slack", "on-call"]),
+    ("profile_filters", ["management zone", "severity", "tag", "filter", "rule"]),
+    ("log_pipeline", ["pipeline", "parser", "grail", "dql", "retention", "processing"]),
+    ("metric_schema", ["schema", "dimension", "selector", "cardinality", "custom metric", "timeseries"]),
+    ("extension_runtime", ["extension", "activation", "runtime", "controller", "unhealthy", "plugin"]),
+]
+
+
 def tokenize(value: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]+", value.lower()) if len(token) > 1]
 
@@ -49,6 +85,39 @@ def matched_product_profiles(problem_statement: str) -> list[dict]:
             matches.append((score, profile))
     matches.sort(key=lambda item: item[0], reverse=True)
     return [profile for _, profile in matches]
+
+
+def detect_subdomain(problem_statement: str, product_area: str) -> tuple[str, float]:
+    lower = problem_statement.lower()
+    rules = SUBDOMAIN_RULES.get(product_area, [])
+    if not rules:
+        return product_area, 0.35
+
+    scored: list[tuple[float, str]] = []
+    for rule in rules:
+        keywords = rule["keywords"]
+        score = 0.0
+        for keyword in keywords:
+            if keyword in lower:
+                score += 7.0 if " " in keyword else 4.0
+        if score > 0:
+            scored.append((score, str(rule["name"])))
+
+    if not scored:
+        return product_area, 0.35
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    top_score, top_name = scored[0]
+    return top_name, min(0.98, 0.3 + (top_score / 24.0))
+
+
+def extract_entity_signals(problem_statement: str) -> list[str]:
+    lower = problem_statement.lower()
+    signals: list[str] = []
+    for label, keywords in ENTITY_SIGNAL_RULES:
+        if any(keyword in lower for keyword in keywords):
+            signals.append(label)
+    return signals
 
 
 def product_area_candidates(problem_statement: str) -> list[tuple[float, str, dict | None]]:
@@ -138,6 +207,8 @@ def diagnose_problem(problem_statement: str) -> Diagnosis:
 
     concern_types = classify_concern(problem_statement)
     severity = estimate_severity(problem_statement, concern_types)
+    subdomain, subdomain_confidence = detect_subdomain(problem_statement, product_area)
+    entity_signals = extract_entity_signals(problem_statement)
     playbook_confidence = playbook_confidence_for_area(problem_statement, product_area)
     playbooks = [
         playbook
@@ -145,6 +216,21 @@ def diagnose_problem(problem_statement: str) -> Diagnosis:
         if playbook_confidence.get(playbook.id, 0.0) >= 0.45
     ]
     failure_modes, failure_mode_confidence = infer_failure_modes(problem_statement, product_area, playbooks)
+    if product_area == "DEM" and subdomain == "RUM Capture":
+        failure_modes = [mode for mode in failure_modes if mode.id != "connectivity_tls"][:3]
+    if product_area == "Davis / Alerting" and subdomain == "Alerting Profiles":
+        failure_modes = [mode for mode in failure_modes if mode.id != "visualization_query_mismatch"][:3]
+    if product_area in {"Log Monitoring", "Metrics Ingestion"} and "metric_schema" in entity_signals:
+        prioritized = sorted(
+            failure_modes,
+            key=lambda mode: 1 if mode.id in {"ingestion_pipeline", "visualization_query_mismatch", "configuration_drift"} else 0,
+            reverse=True,
+        )
+        failure_modes = prioritized[:3]
+    failure_mode_confidence = {
+        mode.id: failure_mode_confidence.get(mode.id, 0.0)
+        for mode in failure_modes
+    }
 
     failure_domains: list[str] = []
     for failure_mode in failure_modes:
@@ -183,17 +269,21 @@ def diagnose_problem(problem_statement: str) -> Diagnosis:
     keywords: list[str] = []
     if profile:
         keywords.extend(profile["keywords"])
+    keywords.append(subdomain)
     for playbook in playbooks:
         keywords.extend(playbook.triggers)
         keywords.extend(playbook.keywords)
     for failure_mode in failure_modes:
         keywords.extend(failure_mode.signals)
+    keywords.extend(entity_signals)
 
     product_confidence = min(0.98, 0.3 + (top_score / 30.0))
 
     return Diagnosis(
         product_area=product_area,
         product_confidence=product_confidence,
+        subdomain=subdomain,
+        subdomain_confidence=subdomain_confidence,
         concern_types=concern_types,
         severity=severity,
         matched_playbooks=playbooks,
@@ -202,8 +292,5 @@ def diagnose_problem(problem_statement: str) -> Diagnosis:
         failure_mode_confidence=failure_mode_confidence,
         failure_domains=failure_domains[:6],
         component_keywords=list(dict.fromkeys(keywords))[:20],
+        entity_signals=list(dict.fromkeys(entity_signals)),
     )
-
-
-def identify_component(problem_statement: str) -> str:
-    return diagnose_problem(problem_statement).product_area
