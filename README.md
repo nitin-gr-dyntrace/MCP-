@@ -219,6 +219,52 @@ The UI is intentionally simple:
 - choose `docs` and `community`
 - review the MCP output in the browser
 
+The result references are clickable in the browser UI.
+
+## Office Laptop And Intranet Guides
+
+If your office laptop can reach internal troubleshooting guides over VPN, you can add them without changing code.
+
+1. Allow the internal hosts:
+
+```bash
+export MCP_ALLOWED_HOSTS=docs.dynatrace.com,community.dynatrace.com,intranet.company.com,confluence.company.com
+```
+
+2. Register one or more internal sitemap-based sources:
+
+```bash
+export MCP_EXTRA_SITEMAPS='intranet=https://intranet.company.com/sitemap.xml,runbooks=https://confluence.company.com/sitemap.xml'
+```
+
+3. If your company network requires a proxy, set it too:
+
+```bash
+export HTTPS_PROXY=http://your-proxy:port
+export HTTP_PROXY=http://your-proxy:port
+export NO_PROXY=localhost,127.0.0.1,.company.com
+```
+
+4. Start the UI again:
+
+```bash
+python3 ui.py
+```
+
+5. Open:
+
+```text
+http://127.0.0.1:8765
+```
+
+Now the UI source list will include the extra internal sources such as `Intranet` or `Runbooks`.
+
+Notes:
+
+- the internal source must expose a sitemap URL
+- the sitemap host must be reachable from the laptop
+- the hostname must also be allowed through `MCP_ALLOWED_HOSTS`
+
 List connector readiness:
 
 ```bash

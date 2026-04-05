@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 SERVER_INFO = {
@@ -9,10 +10,30 @@ SERVER_INFO = {
     "version": "0.1.0",
 }
 
-BASE_ALLOWED_HOSTS = {
-    "docs.dynatrace.com",
-    "community.dynatrace.com",
-}
+BASE_ALLOWED_HOSTS = {"docs.dynatrace.com", "community.dynatrace.com"}
+
+
+def _load_extra_sitemap_sources() -> tuple[dict[str, str], dict[str, str]]:
+    raw = os.environ.get("MCP_EXTRA_SITEMAPS", "").strip()
+    extra_sources: dict[str, str] = {}
+    extra_sitemaps: dict[str, str] = {}
+    if not raw:
+        return extra_sources, extra_sitemaps
+
+    for part in raw.split(","):
+        item = part.strip()
+        if not item or "=" not in item:
+            continue
+        name, sitemap_url = item.split("=", 1)
+        source_name = name.strip().lower().replace(" ", "_")
+        sitemap_url = sitemap_url.strip()
+        hostname = urlparse(sitemap_url).hostname
+        if not source_name or not sitemap_url or not hostname:
+            continue
+        extra_sources[source_name] = hostname.lower()
+        extra_sitemaps[source_name] = sitemap_url
+    return extra_sources, extra_sitemaps
+
 
 SEARCH_SOURCES = {
     "docs": "docs.dynatrace.com",
@@ -23,6 +44,10 @@ SITEMAP_URLS = {
     "docs": "https://docs.dynatrace.com/sitemap.xml",
     "community": "https://community.dynatrace.com/sitemap.xml",
 }
+
+_EXTRA_SEARCH_SOURCES, _EXTRA_SITEMAP_URLS = _load_extra_sitemap_sources()
+SEARCH_SOURCES.update(_EXTRA_SEARCH_SOURCES)
+SITEMAP_URLS.update(_EXTRA_SITEMAP_URLS)
 
 CACHE_DIR = Path(".cache")
 CORPUS_PATH = CACHE_DIR / "dynatrace_corpus.json"
@@ -194,4 +219,5 @@ def configured_allowed_hosts() -> set[str]:
         for host in os.environ.get("MCP_ALLOWED_HOSTS", "").split(",")
         if host.strip()
     }
-    return BASE_ALLOWED_HOSTS | extra_hosts
+    source_hosts = {host.lower() for host in SEARCH_SOURCES.values()}
+    return BASE_ALLOWED_HOSTS | source_hosts | extra_hosts

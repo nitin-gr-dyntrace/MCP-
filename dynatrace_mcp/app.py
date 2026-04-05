@@ -778,7 +778,7 @@ def read_page(url: str) -> dict[str, str]:
     title = strip_html(unescape(title_match.group(1))) if title_match else allowed
     excerpt = strip_html(html)[:4000]
     hostname = urlparse(allowed).hostname or ""
-    source = "docs" if hostname == SEARCH_SOURCES["docs"] else "community"
+    source = next((name for name, host in SEARCH_SOURCES.items() if host == hostname), hostname)
     return {
         "title": title or allowed,
         "url": allowed,
@@ -968,6 +968,7 @@ def build_connector_registry() -> dict[str, BaseConnector]:
 
 
 CONNECTORS = build_connector_registry()
+SOURCE_NAMES = list(SEARCH_SOURCES)
 
 ENTITY_QUESTION_HINTS = {
     "frontend_deployment": [
@@ -1381,18 +1382,18 @@ def build_investigation_plan_text(problem_statement: str, sources: list[str], ma
 
 def normalize_sources(value: Any) -> list[str]:
     if not isinstance(value, list):
-        return ["docs", "community"]
+        return SOURCE_NAMES.copy()
 
     valid = [item for item in value if isinstance(item, str) and item in SEARCH_SOURCES]
-    return valid or ["docs", "community"]
+    return valid or SOURCE_NAMES.copy()
 
 
 def normalize_connectors(value: Any) -> list[str]:
     if not isinstance(value, list):
-        return ["docs", "community"]
+        return SOURCE_NAMES.copy()
 
     valid = [item for item in value if isinstance(item, str) and item in CONNECTORS]
-    return valid or ["docs", "community"]
+    return valid or SOURCE_NAMES.copy()
 
 
 def connector_status_report() -> list[dict[str, Any]]:
@@ -1467,7 +1468,7 @@ def list_tools() -> dict[str, Any]:
                             "type": "array",
                             "items": {
                                 "type": "string",
-                                "enum": ["docs", "community"],
+                                "enum": SOURCE_NAMES,
                             },
                         },
                         "maxResults": {
@@ -1493,7 +1494,7 @@ def list_tools() -> dict[str, Any]:
                             "type": "array",
                             "items": {
                                 "type": "string",
-                                "enum": ["docs", "community", "stackoverflow", "slack", "jira"],
+                                "enum": SOURCE_NAMES + ["stackoverflow", "slack", "jira"],
                             },
                         },
                         "maxResults": {
@@ -1555,7 +1556,7 @@ def list_tools() -> dict[str, Any]:
                             "type": "array",
                             "items": {
                                 "type": "string",
-                                "enum": ["docs", "community"],
+                                "enum": SOURCE_NAMES,
                             },
                         },
                         "maxResults": {
@@ -1581,7 +1582,7 @@ def list_tools() -> dict[str, Any]:
                             "type": "array",
                             "items": {
                                 "type": "string",
-                                "enum": ["docs", "community"],
+                                "enum": SOURCE_NAMES,
                             },
                         },
                         "maxResults": {
@@ -1607,7 +1608,7 @@ def list_tools() -> dict[str, Any]:
                             "type": "array",
                             "items": {
                                 "type": "string",
-                                "enum": ["docs", "community"],
+                                "enum": SOURCE_NAMES,
                             },
                         },
                         "maxResults": {
@@ -1633,7 +1634,7 @@ def list_tools() -> dict[str, Any]:
                             "type": "array",
                             "items": {
                                 "type": "string",
-                                "enum": ["docs", "community"],
+                                "enum": SOURCE_NAMES,
                             },
                         },
                         "maxResults": {
@@ -1659,7 +1660,7 @@ def list_tools() -> dict[str, Any]:
                             "type": "array",
                             "items": {
                                 "type": "string",
-                                "enum": ["docs", "community"],
+                                "enum": SOURCE_NAMES,
                             },
                         },
                         "maxPages": {
@@ -1685,7 +1686,7 @@ def list_tools() -> dict[str, Any]:
                             "type": "array",
                             "items": {
                                 "type": "string",
-                                "enum": ["docs", "community"],
+                                "enum": SOURCE_NAMES,
                             },
                         },
                         "maxResults": {
@@ -1906,7 +1907,7 @@ def parse_demo_args(values: list[str]) -> tuple[str, dict[str, Any]]:
 
     search_parser = subparsers.add_parser("search", help="Run search_dynatrace_knowledge")
     search_parser.add_argument("query", help="Search query")
-    search_parser.add_argument("--sources", nargs="*", choices=["docs", "community"], default=None)
+    search_parser.add_argument("--sources", nargs="*", choices=SOURCE_NAMES, default=None)
     search_parser.add_argument("--max-results", type=int, default=5)
 
     support_search_parser = subparsers.add_parser("search-all", help="Run search_support_sources")
@@ -1921,7 +1922,7 @@ def parse_demo_args(values: list[str]) -> tuple[str, dict[str, Any]]:
 
     debug_parser = subparsers.add_parser("debug-search", help="Inspect raw search parsing for one source")
     debug_parser.add_argument("query", help="Search query")
-    debug_parser.add_argument("--source", choices=["docs", "community"], default="docs")
+    debug_parser.add_argument("--source", choices=SOURCE_NAMES, default=SOURCE_NAMES[0])
 
     subparsers.add_parser("list-connectors", help="Show configured connectors")
 
@@ -1933,7 +1934,7 @@ def parse_demo_args(values: list[str]) -> tuple[str, dict[str, Any]]:
 
     analyze_parser = subparsers.add_parser("analyze", help="Run analyze_customer_concern")
     analyze_parser.add_argument("problem_statement", help="Customer issue description")
-    analyze_parser.add_argument("--sources", nargs="*", choices=["docs", "community"], default=None)
+    analyze_parser.add_argument("--sources", nargs="*", choices=SOURCE_NAMES, default=None)
     analyze_parser.add_argument("--max-results", type=int, default=5)
 
     classify_parser = subparsers.add_parser("classify", help="Run offline concern classification only")
@@ -1941,27 +1942,27 @@ def parse_demo_args(values: list[str]) -> tuple[str, dict[str, Any]]:
 
     triage_parser = subparsers.add_parser("triage", help="Run triage_case")
     triage_parser.add_argument("problem_statement", help="Customer issue description")
-    triage_parser.add_argument("--sources", nargs="*", choices=["docs", "community"], default=None)
+    triage_parser.add_argument("--sources", nargs="*", choices=SOURCE_NAMES, default=None)
     triage_parser.add_argument("--max-results", type=int, default=5)
 
     bug_parser = subparsers.add_parser("bug-escalation", help="Run build_bug_escalation")
     bug_parser.add_argument("problem_statement", help="Customer issue description")
-    bug_parser.add_argument("--sources", nargs="*", choices=["docs", "community"], default=None)
+    bug_parser.add_argument("--sources", nargs="*", choices=SOURCE_NAMES, default=None)
     bug_parser.add_argument("--max-results", type=int, default=5)
 
     response_parser = subparsers.add_parser("customer-response", help="Run build_customer_response")
     response_parser.add_argument("problem_statement", help="Customer issue description")
-    response_parser.add_argument("--sources", nargs="*", choices=["docs", "community"], default=None)
+    response_parser.add_argument("--sources", nargs="*", choices=SOURCE_NAMES, default=None)
     response_parser.add_argument("--max-results", type=int, default=5)
 
     plan_parser = subparsers.add_parser("investigation-plan", help="Run build_investigation_plan")
     plan_parser.add_argument("problem_statement", help="Customer issue description")
-    plan_parser.add_argument("--sources", nargs="*", choices=["docs", "community"], default=None)
+    plan_parser.add_argument("--sources", nargs="*", choices=SOURCE_NAMES, default=None)
     plan_parser.add_argument("--max-results", type=int, default=5)
 
     prime_parser = subparsers.add_parser("prime", help="Run prime_topic_cache")
     prime_parser.add_argument("query", help="Topic to cache")
-    prime_parser.add_argument("--sources", nargs="*", choices=["docs", "community"], default=None)
+    prime_parser.add_argument("--sources", nargs="*", choices=SOURCE_NAMES, default=None)
     prime_parser.add_argument("--max-pages", type=int, default=10)
 
     parsed = parser.parse_args(values)

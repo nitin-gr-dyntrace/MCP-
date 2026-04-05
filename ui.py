@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
+from dynatrace_mcp.config import SEARCH_SOURCES
 from dynatrace_mcp.app import (
     build_customer_response_text,
     build_investigation_plan_text,
@@ -22,6 +24,32 @@ OUTPUT_MODES = {
 }
 
 
+def source_label(name: str) -> str:
+    if name == "docs":
+        return "Docs"
+    if name == "community":
+        return "Community"
+    return name.replace("_", " ").title()
+
+
+def render_output_html(text: str) -> str:
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        escaped = html.escape(raw_line)
+        if raw_line.startswith("URL: "):
+            url = raw_line[5:].strip()
+            safe_url = html.escape(url, quote=True)
+            escaped = f'URL: <a href="{safe_url}" target="_blank" rel="noreferrer">{safe_url}</a>'
+        else:
+            escaped = re.sub(
+                r"(https?://[^\s]+)",
+                lambda match: f'<a href="{html.escape(match.group(1), quote=True)}" target="_blank" rel="noreferrer">{html.escape(match.group(1))}</a>',
+                escaped,
+            )
+        lines.append(escaped)
+    return "<pre class=\"output-pre\">" + "\n".join(lines) + "</pre>"
+
+
 def render_page(
     *,
     problem_statement: str = "",
@@ -31,9 +59,8 @@ def render_page(
     output: str = "",
     error: str = "",
 ) -> str:
-    selected_sources = sources or ["docs", "community"]
-    source_docs = "checked" if "docs" in selected_sources else ""
-    source_community = "checked" if "community" in selected_sources else ""
+    default_sources = list(SEARCH_SOURCES)
+    selected_sources = sources or default_sources
 
     mode_cards: list[str] = []
     for key, (label, _) in OUTPUT_MODES.items():
@@ -47,6 +74,13 @@ def render_page(
             """
         )
 
+    source_options = []
+    for source_name in SEARCH_SOURCES:
+        checked = "checked" if source_name in selected_sources else ""
+        source_options.append(
+            f'<label><input type="checkbox" name="sources" value="{html.escape(source_name)}" {checked}> {html.escape(source_label(source_name))}</label>'
+        )
+
     output_html = ""
     if output:
         output_html = f"""
@@ -54,7 +88,7 @@ def render_page(
           <div class="panel-header">
             <h2>Result</h2>
           </div>
-          <pre>{html.escape(output)}</pre>
+          {render_output_html(output)}
         </section>
         """
     elif error:
@@ -63,7 +97,7 @@ def render_page(
           <div class="panel-header">
             <h2>Error</h2>
           </div>
-          <pre>{html.escape(error)}</pre>
+          {render_output_html(error)}
         </section>
         """
 
@@ -249,6 +283,11 @@ def render_page(
       line-height: 1.5;
       background: #fffdfa;
     }}
+    .output-pre a {{
+      color: var(--accent);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }}
     .error-panel pre {{
       color: var(--danger);
     }}
@@ -291,8 +330,7 @@ def render_page(
             <div class="control-box">
               <div>Sources</div>
               <div class="source-list">
-                <label><input type="checkbox" name="sources" value="docs" {source_docs}> Docs</label>
-                <label><input type="checkbox" name="sources" value="community" {source_community}> Community</label>
+                {''.join(source_options)}
               </div>
             </div>
             <div class="control-box">
@@ -333,7 +371,7 @@ class MCPUIHandler(BaseHTTPRequestHandler):
         payload = parse_qs(raw)
 
         problem_statement = payload.get("problem_statement", [""])[0].strip()
-        sources = payload.get("sources", ["docs", "community"])
+        sources = payload.get("sources", list(SEARCH_SOURCES))
         mode = payload.get("mode", ["triage"])[0]
         max_results_raw = payload.get("max_results", ["6"])[0]
 
@@ -346,7 +384,7 @@ class MCPUIHandler(BaseHTTPRequestHandler):
             mode = "triage"
 
         if not sources:
-            sources = ["docs", "community"]
+            sources = list(SEARCH_SOURCES)
 
         if not problem_statement:
             page = render_page(
