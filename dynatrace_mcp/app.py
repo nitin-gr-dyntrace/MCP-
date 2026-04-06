@@ -1196,6 +1196,17 @@ def compare_results_by_source(results: list[SearchResult]) -> str:
 
 
 def customer_issue_explanation(diagnosis: Diagnosis) -> str:
+    subdomain_messages = {
+        "Alerting Profiles": "Based on the current symptoms, this looks most consistent with alerting-profile or notification-routing drift rather than a problem-detection outage.",
+        "RUM Capture": "Based on the current symptoms, this looks most consistent with a RUM capture issue introduced by the frontend change rather than a complete application outage.",
+        "Synthetic Monitoring": "Based on the current symptoms, this looks most consistent with synthetic monitor drift or execution mismatch rather than a general platform outage.",
+        "Extension Runtime": "Based on the current symptoms, this looks most consistent with an extension runtime or activation-path issue after the recent change.",
+        "Extension Compatibility": "Based on the current symptoms, this looks most consistent with an extension compatibility issue introduced by the upgrade path.",
+        "Log Ingestion Pipeline": "Based on the current symptoms, this looks most consistent with an ingest or processing-pipeline issue rather than a pure dashboard problem.",
+        "Metric Ingestion": "Based on the current symptoms, this looks most consistent with a metric-ingestion or schema-alignment issue.",
+    }
+    if diagnosis.subdomain in subdomain_messages:
+        return subdomain_messages[diagnosis.subdomain]
     if diagnosis.failure_modes:
         primary = diagnosis.failure_modes[0].title.lower()
         return f"Based on the current symptoms, this appears most consistent with {primary} in {diagnosis.product_area}."
@@ -1205,15 +1216,52 @@ def customer_issue_explanation(diagnosis: Diagnosis) -> str:
     return f"Based on the current symptoms, this appears to be related to {diagnosis.product_area}."
 
 
+def customer_request_intro(diagnosis: Diagnosis) -> str:
+    intros = {
+        "Alerting Profiles": "To validate the routing path and identify where notifications stopped matching, could you share the following:",
+        "RUM Capture": "To confirm whether the frontend change affected browser-side capture, could you share the following:",
+        "Synthetic Monitoring": "To verify whether the issue is in monitor definition or execution, could you share the following:",
+        "Extension Runtime": "To confirm whether the failure is in activation or runtime execution, could you share the following:",
+        "Extension Compatibility": "To validate the upgrade path and version alignment, could you share the following:",
+        "Log Ingestion Pipeline": "To isolate whether the loss is at ingest, processing, or query time, could you share the following:",
+        "Metric Ingestion": "To confirm whether this is a payload, schema, or selector issue, could you share the following:",
+    }
+    return intros.get(diagnosis.subdomain, "To move this forward, could you please share the following:")
+
+
+def customer_action_intro(diagnosis: Diagnosis) -> str:
+    intros = {
+        "Alerting Profiles": "As a quick validation step, you may also consider:",
+        "RUM Capture": "As an immediate browser-side check, you may also consider:",
+        "Synthetic Monitoring": "As an immediate monitor-side check, you may also consider:",
+        "Extension Runtime": "As an initial runtime check, you may also consider:",
+        "Extension Compatibility": "As an initial compatibility check, you may also consider:",
+        "Log Ingestion Pipeline": "As an initial isolation step, you may also consider:",
+        "Metric Ingestion": "As an initial data-path check, you may also consider:",
+    }
+    return intros.get(diagnosis.subdomain, "As an initial step, you may also consider:")
+
+
+def customer_closing_line(diagnosis: Diagnosis) -> str:
+    closings = {
+        "Alerting Profiles": "Once we have that detail, we can narrow down whether the gap is in profile matching, notification delivery, or a broader regression.",
+        "RUM Capture": "Once we review those details, we can tell whether the loss is in snippet injection, browser blocking, or capture behavior after the deployment.",
+        "Extension Runtime": "Once we review that data, we can separate activation drift from a deeper runtime or compatibility issue.",
+        "Log Ingestion Pipeline": "Once we review that data, we can tell whether the issue starts at ingest, in the processing path, or only in the final dashboard layer.",
+        "Metric Ingestion": "Once we review those details, we can narrow down whether the gap is in ingestion, schema alignment, or dashboard selectors.",
+    }
+    return closings.get(diagnosis.subdomain, "We’ll review the details and guide you on the next best action once we have this information.")
+
+
 def build_customer_response_draft(problem_statement: str, diagnosis: Diagnosis, results: list[SearchResult]) -> str:
     requests = targeted_customer_requests(problem_statement, diagnosis)[:3]
     mitigations = playbook_mitigations_from_diagnosis(diagnosis)[:2]
     body = [
         "Hi Team,",
         "",
-        f"{customer_issue_explanation(diagnosis)} Since the issue appears limited to {diagnosis.product_area} and the current scope is {diagnosis.severity} severity, this is more likely to be isolated configuration or connectivity behavior than a platform-wide failure.",
+        customer_issue_explanation(diagnosis),
         "",
-        "To move this forward, could you please share the following:",
+        customer_request_intro(diagnosis),
         *[f"- {item}" for item in requests],
     ]
 
@@ -1221,7 +1269,7 @@ def build_customer_response_draft(problem_statement: str, diagnosis: Diagnosis, 
         body.extend(
             [
                 "",
-                "As an initial step, you may also consider:",
+                customer_action_intro(diagnosis),
                 *[f"- {item}" for item in mitigations],
             ]
         )
@@ -1229,7 +1277,7 @@ def build_customer_response_draft(problem_statement: str, diagnosis: Diagnosis, 
     body.extend(
         [
             "",
-            "We’ll review the details and guide you on the next best action once we have this information.",
+            customer_closing_line(diagnosis),
         ]
     )
 
