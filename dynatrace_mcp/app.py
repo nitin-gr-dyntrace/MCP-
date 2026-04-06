@@ -1067,20 +1067,40 @@ def entity_mitigations_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
         mitigations.extend(ENTITY_MITIGATION_HINTS.get(signal, []))
     return list(dict.fromkeys(mitigations))
 
-def investigation_questions_from_diagnosis(problem_statement: str, diagnosis: Diagnosis) -> list[str]:
-    questions = [
+def generic_questions_for_diagnosis(diagnosis: Diagnosis) -> list[str]:
+    if diagnosis.subdomain_confidence >= 0.8:
+        return [
+            "What changed just before the issue started, such as configuration, rollout, upgrade, or network changes?",
+            "What is the exact scope of impact and who is affected right now?",
+        ]
+    return [
         "What changed just before the issue started, such as configuration, rollout, upgrade, or network changes?",
         "What is the exact scope of impact: one host, one cluster, one tenant, or all environments?",
         "Can the customer share timestamps, screenshots, logs, and exact error messages?",
     ]
-    questions.extend(entity_questions_from_diagnosis(diagnosis))
+
+
+def targeted_customer_requests(problem_statement: str, diagnosis: Diagnosis) -> list[str]:
+    targeted: list[str] = []
+    targeted.extend(entity_questions_from_diagnosis(diagnosis))
+
     profiles = [profile for profile in PRODUCT_AREA_PROFILES if profile["name"] == diagnosis.product_area]
     for profile in profiles[:1]:
-        questions.extend(profile["questions"])
+        targeted.extend(profile["questions"])
+
     for failure_mode in diagnosis.failure_modes:
-        questions.extend(failure_mode.questions)
+        targeted.extend(failure_mode.questions)
+
     for playbook in diagnosis.matched_playbooks:
-        questions.extend(playbook.questions)
+        targeted.extend(playbook.questions)
+
+    generic = generic_questions_for_diagnosis(diagnosis)
+    combined = list(dict.fromkeys(targeted + generic))
+    return combined[:6]
+
+
+def investigation_questions_from_diagnosis(problem_statement: str, diagnosis: Diagnosis) -> list[str]:
+    questions = targeted_customer_requests(problem_statement, diagnosis)
     if "possible_bug_for_engineering" in diagnosis.concern_types:
         questions.append("Can the issue be reproduced consistently, and what are the exact steps?")
     return list(dict.fromkeys(questions))[:7]
@@ -1186,7 +1206,7 @@ def customer_issue_explanation(diagnosis: Diagnosis) -> str:
 
 
 def build_customer_response_draft(problem_statement: str, diagnosis: Diagnosis, results: list[SearchResult]) -> str:
-    requests = investigation_questions_from_diagnosis(problem_statement, diagnosis)[:3]
+    requests = targeted_customer_requests(problem_statement, diagnosis)[:3]
     mitigations = playbook_mitigations_from_diagnosis(diagnosis)[:2]
     body = [
         "Hi Team,",
