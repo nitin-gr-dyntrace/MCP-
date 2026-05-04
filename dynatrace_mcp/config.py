@@ -75,6 +75,11 @@ SUPPORT_SYNONYMS = {
     "dql": ["grail", "dynatrace query language", "fetch", "summarize", "fieldsadd"],
     "notebook": ["grail", "dql", "data explorer"],
     "retention": ["bucket", "grail", "data retention", "ingestion"],
+    "lookup": ["dql lookup", "join", "joined query", "cross-environment"],
+    "javascript tile": ["js tile", "app tile", "notebook tile", "grail notebook"],
+    "aws": ["amazon", "aws integration", "cloud integration", "aws extension"],
+    "iam": ["aws iam", "aws role", "aws policy", "authorization error"],
+    "pending connection": ["aws pending", "cloud pending", "connection status"],
 }
 
 PRODUCT_AREA_PROFILES = [
@@ -215,18 +220,47 @@ PRODUCT_AREA_PROFILES = [
     },
     {
         "name": "Grail / DQL",
-        "keywords": ["grail", "dql", "dynatrace query language", "notebook", "data explorer", "fetch", "summarize", "fieldsadd", "bucket", "retention"],
+        "keywords": [
+            "grail", "dql", "dynatrace query language", "notebook", "data explorer",
+            "fetch", "summarize", "fieldsadd", "bucket", "retention",
+            "javascript tile", "js tile", "lookup", "joined query", "app tile",
+            "cross-environment", "merge environments", "join query",
+        ],
         "questions": [
-            "Is the issue with query syntax, unexpected results, or missing data in Grail?",
+            "Is the issue with query syntax, an unsupported function, or unexpected results?",
             "Which data type is being queried: logs, metrics, events, spans, or entities?",
-            "Did a schema, retention policy, or ingest pipeline change precede the issue?",
+            "Is the query running inside a Notebook tile, App tile, or a dashboard widget?",
+            "Does the query work in isolation but fail when combined with a join or lookup?",
         ],
         "evidence": [
-            "Full DQL query text and error message or unexpected output",
-            "Expected versus actual result set",
+            "Full DQL query text and the exact error message or unexpected output",
+            "Expected versus actual result set with a sample of the data",
+            "Whether the query uses lookup, join, or cross-environment references",
             "Relevant retention bucket and time range",
         ],
         "risks": ["data not queryable", "incorrect analysis or alerting based on bad query results"],
+    },
+    {
+        "name": "Cloud Integration",
+        "keywords": [
+            "aws", "amazon", "aws integration", "cloud integration", "iam", "cloudwatch",
+            "s3", "ec2", "lambda", "datasync", "kms", "cloud connector", "aws extension",
+            "azure", "gcp", "google cloud", "aws account", "aws connection", "pending connection",
+            "authorization error", "cloud metrics", "aws credentials", "arn",
+        ],
+        "questions": [
+            "Which cloud provider and accounts are affected, and when did the connection status change?",
+            "Have the IAM roles, policies, or trust relationships changed since the integration was set up?",
+            "Is the issue isolated to specific AWS services or all metrics across all accounts?",
+            "Does the connection show differently in the classic Extensions page versus the new Settings UI?",
+        ],
+        "evidence": [
+            "IAM role ARN, attached policies, and any recent policy change history",
+            "Connection status from both the classic Extensions page and the new cloud integration settings",
+            "Full authorization error messages with exact IAM action names",
+            "CloudTrail or AWS access logs around the time the connectivity dropped",
+        ],
+        "risks": ["cloud monitoring blind spot", "IAM policy drift causing partial or full metric loss", "silent data gap if pending status is not caught early"],
     },
 ]
 

@@ -30,8 +30,18 @@ SUBDOMAIN_RULES: dict[str, list[dict[str, object]]] = {
         {"name": "Extension Compatibility", "keywords": ["upgrade", "version", "compatibility", "supported"]},
     ],
     "Grail / DQL": [
-        {"name": "DQL Query", "keywords": ["dql", "fetch", "summarize", "fieldsadd", "query", "syntax", "notebook", "data explorer"]},
+        {"name": "DQL Query", "keywords": ["dql", "fetch", "summarize", "fieldsadd", "query", "syntax", "notebook", "data explorer", "lookup", "join", "javascript tile", "js tile", "app tile"]},
         {"name": "Grail Retention", "keywords": ["retention", "bucket", "delete", "expire", "policy", "storage"]},
+    ],
+    "Kubernetes Monitoring": [
+        {"name": "Operator and Deployment", "keywords": ["operator", "helm", "daemonset", "deployment", "install", "upgrade", "rollout", "version", "pod", "namespace"]},
+        {"name": "Cluster Visibility", "keywords": ["cluster", "not showing", "missing", "node", "workload", "visibility", "topology", "discovered", "not discovered"]},
+        {"name": "Node and Process Monitoring", "keywords": ["process", "process group", "node", "cpu", "memory", "container", "resource", "workload metrics"]},
+    ],
+    "Cloud Integration": [
+        {"name": "IAM and Permissions", "keywords": ["iam", "policy", "permission", "forbidden", "authorization error", "role", "trust", "arn", "credentials"]},
+        {"name": "Connection Status", "keywords": ["pending", "connection", "disconnect", "status", "healthy", "unhealthy", "classic", "new ui"]},
+        {"name": "Metric and Service Coverage", "keywords": ["metrics", "cloudwatch", "services", "datasync", "kms", "lambda", "s3", "ec2", "coverage", "lapse"]},
     ],
 }
 
@@ -63,7 +73,17 @@ def classify_concern(problem_statement: str) -> list[str]:
     labels: list[str] = []
 
     if re.search(
-        r"not working|broken|failing|error|issue|down|unavailable|stopped|not sending|missing data|no data|dropped|failed",
+        r"not yet available|not available in|feature not available|not supported in|"
+        r"doesn.t exist in|missing feature|feature request|workaround|limitation|"
+        r"not implemented|coming soon|roadmap|planned feature|gen3 doesn|"
+        r"classic apps|net new|fully gen3",
+        lower,
+    ):
+        labels.append("feature_gap")
+    if re.search(
+        r"not working|broken|failing|error|issue|down|unavailable|stopped|not sending|"
+        r"missing data|no data|dropped|failed|not showing|not visible|not collected|"
+        r"not displayed|not discovered|disconnect|lapse|pending",
         lower,
     ):
         labels.append("product_not_working")
@@ -79,12 +99,21 @@ def estimate_severity(problem_statement: str, concern_types: list[str]) -> str:
     lower = problem_statement.lower()
     has_impact = "customer_environment_impact" in concern_types
     has_bug = "possible_bug_for_engineering" in concern_types
+    has_gap = "feature_gap" in concern_types
     if has_impact and has_bug:
         return "high"
     if has_impact and re.search(
         r"production|outage|critical|all hosts|tenant down|cluster down|blocked", lower
     ):
         return "high"
+    if has_impact and re.search(
+        r"asap|urgent|time crunch|deadline|world cup|conference|go.live|launch|before \w+ \d|"
+        r"hosting|event|before then|running smoothly|need.+before",
+        lower,
+    ):
+        return "high"
+    if has_gap and has_impact:
+        return "medium"
     if "product_not_working" in concern_types or has_impact:
         return "medium"
     return "normal"
