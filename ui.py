@@ -1,18 +1,17 @@
 from __future__ import annotations
-
 import html
 import json
-import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
-from dynatrace_mcp.config import SEARCH_SOURCES
 from dynatrace_mcp.app import (
+    build_bug_escalation_text,
     build_customer_response_text,
+    build_follow_up_text,
     build_investigation_plan_text,
     build_triage_text,
 )
-
+from dynatrace_mcp.feedback import get_feedback_store
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -21,316 +20,203 @@ OUTPUT_MODES = {
     "triage": ("Triage", build_triage_text),
     "investigation": ("Investigation Plan", build_investigation_plan_text),
     "customer_response": ("Customer Response", build_customer_response_text),
+    "bug_escalation": ("Bug Escalation", build_bug_escalation_text),
 }
 
 
-def source_label(name: str) -> str:
-    if name == "docs":
-        return "Docs"
-    if name == "community":
-        return "Community"
-    return name.replace("_", " ").title()
+def _mode_cards(mode: str) -> str:
+    cards = []
+    for key, (label, _) in OUTPUT_MODES.items():
+        checked = "checked" if key == mode else ""
+        cards.append(
+            f'<label class="mode-card">'
+            f'<input type="radio" name="mode" value="{html.escape(key)}" {checked} onchange="toggleMode()">'
+            f'<span>{html.escape(label)}</span></label>'
+        )
+    follow_checked = "checked" if mode == "follow_up" else ""
+    cards.append(
+        f'<label class="mode-card follow-card">'
+        f'<input type="radio" name="mode" value="follow_up" {follow_checked} onchange="toggleMode()">'
+        f'<span>Follow Up</span></label>'
+    )
+    return "\n".join(cards)
 
 
-def render_output_html(text: str) -> str:
-    lines: list[str] = []
-    for raw_line in text.splitlines():
-        escaped = html.escape(raw_line)
-        if raw_line.startswith("URL: "):
-            url = raw_line[5:].strip()
-            safe_url = html.escape(url, quote=True)
-            escaped = f'URL: <a href="{safe_url}" target="_blank" rel="noreferrer">{safe_url}</a>'
-        else:
-            escaped = re.sub(
-                r"(https?://[^\s]+)",
-                lambda match: f'<a href="{html.escape(match.group(1), quote=True)}" target="_blank" rel="noreferrer">{html.escape(match.group(1))}</a>',
-                escaped,
-            )
-        lines.append(escaped)
-    return "<pre class=\"output-pre\">" + "\n".join(lines) + "</pre>"
+def _feedback_panel(original_problem: str) -> str:
+    if not original_problem:
+        return ""
+    esc = html.escape(original_problem)
+    return f"""
+<section class="panel" style="margin-top:18px">
+  <div class="panel-header"><h2>Was this answer helpful?</h2></div>
+  <div class="panel-body">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <form method="post" action="/feedback">
+        <input type="hidden" name="fb_type" value="correction">
+        <input type="hidden" name="fb_problem" value="{esc}">
+        <label class="block">What was wrong?</label>
+        <textarea name="fb_wrong" style="min-height:70px" placeholder="Briefly describe the error..."></textarea>
+        <label class="block" style="margin-top:10px">Correct information</label>
+        <textarea name="fb_correct" style="min-height:70px" placeholder="Provide the right guidance..."></textarea>
+        <input type="text" name="fb_area" placeholder="Product area (optional)" style="margin-top:10px">
+        <button type="submit" style="margin-top:8px;background:#9f1239">Submit Correction</button>
+      </form>
+      <form method="post" action="/feedback">
+        <input type="hidden" name="fb_type" value="confirmation">
+        <input type="hidden" name="fb_problem" value="{esc}">
+        <label class="block">What was correct?</label>
+        <textarea name="fb_confirm" style="min-height:70px" placeholder="Describe what insight or fix worked..."></textarea>
+        <input type="text" name="fb_area" placeholder="Product area (optional)" style="margin-top:10px">
+        <button type="submit" style="margin-top:8px">Confirm Answer</button>
+      </form>
+    </div>
+  </div>
+</section>"""
+
+
+def _output_panel(output: str, error: str, original_problem: str = "") -> str:
+    if output:
+        return (
+            '<section class="panel result-panel">'
+            '<div class="panel-header"><h2>Result</h2></div>'
+            f'<pre>{html.escape(output)}</pre>'
+            '</section>'
+            + _feedback_panel(original_problem)
+        )
+    if error:
+        return (
+            '<section class="panel result-panel error-panel">'
+            '<div class="panel-header"><h2>Error</h2></div>'
+            f'<pre>{html.escape(error)}</pre>'
+            '</section>'
+        )
+    return (
+        '<section class="panel result-panel">'
+        '<div class="panel-header"><h2>Result</h2></div>'
+        '<pre>Your result will appear here after you run the analysis.</pre>'
+        '</section>'
+    )
 
 
 def render_page(
     *,
     problem_statement: str = "",
+    session_id: str = "",
+    follow_up_message: str = "",
     sources: list[str] | None = None,
     mode: str = "triage",
     max_results: int = 6,
     output: str = "",
     error: str = "",
 ) -> str:
-    default_sources = list(SEARCH_SOURCES)
-    selected_sources = sources or default_sources
-
-    mode_cards: list[str] = []
-    for key, (label, _) in OUTPUT_MODES.items():
-        checked = "checked" if key == mode else ""
-        mode_cards.append(
-            f"""
-            <label class="mode-card">
-              <input type="radio" name="mode" value="{html.escape(key)}" {checked}>
-              <span>{html.escape(label)}</span>
-            </label>
-            """
-        )
-
-    source_options = []
-    for source_name in SEARCH_SOURCES:
-        checked = "checked" if source_name in selected_sources else ""
-        source_options.append(
-            f'<label><input type="checkbox" name="sources" value="{html.escape(source_name)}" {checked}> {html.escape(source_label(source_name))}</label>'
-        )
-
-    output_html = ""
-    if output:
-        output_html = f"""
-        <section class="panel result-panel">
-          <div class="panel-header">
-            <h2>Result</h2>
-          </div>
-          {render_output_html(output)}
-        </section>
-        """
-    elif error:
-        output_html = f"""
-        <section class="panel result-panel error-panel">
-          <div class="panel-header">
-            <h2>Error</h2>
-          </div>
-          {render_output_html(error)}
-        </section>
-        """
+    selected = sources or ["docs", "community"]
+    source_docs = "checked" if "docs" in selected else ""
+    source_community = "checked" if "community" in selected else ""
+    is_follow_up = mode == "follow_up"
 
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dynatrace Support MCP UI</title>
+  <title>TraceSage 2.0</title>
   <style>
     :root {{
-      --bg: #f4efe8;
-      --surface: #fffaf4;
-      --surface-strong: #fff;
-      --text: #1f1a16;
-      --muted: #6b6057;
-      --border: #d8c9bb;
-      --accent: #0f766e;
-      --accent-soft: #d8f3ef;
-      --danger: #9f1239;
-      --shadow: 0 18px 40px rgba(74, 58, 44, 0.08);
+      --bg: #f4efe8; --surface: #fffaf4; --surface-strong: #fff;
+      --text: #1f1a16; --muted: #6b6057; --border: #d8c9bb;
+      --accent: #0f766e; --accent-soft: #d8f3ef; --danger: #9f1239;
+      --shadow: 0 18px 40px rgba(74,58,44,0.08);
     }}
     * {{ box-sizing: border-box; }}
     body {{
-      margin: 0;
-      font-family: Georgia, "Times New Roman", serif;
-      background:
-        radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 32%),
-        linear-gradient(180deg, #f7f2ea 0%, #efe7dc 100%);
+      margin: 0; font-family: Georgia,"Times New Roman",serif;
+      background: radial-gradient(circle at top left,rgba(15,118,110,0.12),transparent 32%),
+                  linear-gradient(180deg,#f7f2ea 0%,#efe7dc 100%);
       color: var(--text);
     }}
-    .shell {{
-      width: min(1180px, calc(100vw - 32px));
-      margin: 24px auto 40px;
-      display: grid;
-      gap: 18px;
-    }}
-    .hero {{
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 22px;
-      padding: 28px;
-      box-shadow: var(--shadow);
-    }}
-    .hero h1 {{
-      margin: 0 0 8px;
-      font-size: clamp(2rem, 4vw, 3.2rem);
-      line-height: 0.95;
-      letter-spacing: -0.04em;
-    }}
-    .hero p {{
-      margin: 0;
-      max-width: 780px;
-      color: var(--muted);
-      font-size: 1.02rem;
-    }}
-    .grid {{
-      display: grid;
-      grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
-      gap: 18px;
-      align-items: start;
-    }}
-    .panel {{
-      background: var(--surface-strong);
-      border: 1px solid var(--border);
-      border-radius: 22px;
-      box-shadow: var(--shadow);
-      overflow: hidden;
-    }}
-    .panel-header {{
-      padding: 18px 20px 0;
-    }}
-    .panel-header h2 {{
-      margin: 0;
-      font-size: 1rem;
-      letter-spacing: 0.02em;
-      text-transform: uppercase;
-      color: var(--muted);
-    }}
-    .panel-body {{
-      padding: 18px 20px 20px;
-    }}
-    label.block {{
-      display: block;
-      margin-bottom: 10px;
-      font-size: 0.92rem;
-      color: var(--muted);
-    }}
-    textarea {{
-      width: 100%;
-      min-height: 200px;
-      border-radius: 16px;
-      border: 1px solid var(--border);
-      padding: 14px 16px;
-      font: inherit;
-      resize: vertical;
-      background: #fffdf9;
-      color: var(--text);
-    }}
-    .modes {{
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-      margin-bottom: 16px;
-    }}
-    .mode-card {{
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      min-width: 0;
-      padding: 12px 10px;
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      background: #fffcf7;
-      cursor: pointer;
-      font-size: 0.88rem;
-      text-align: center;
-    }}
-    .mode-card input {{
-      accent-color: var(--accent);
-      flex: 0 0 auto;
-    }}
-    .mode-card span {{
-      line-height: 1.15;
-      overflow-wrap: anywhere;
-    }}
-    .controls {{
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      margin-bottom: 16px;
-    }}
-    .control-box {{
-      padding: 12px 14px;
-      border-radius: 16px;
-      border: 1px solid var(--border);
-      background: #fffcf7;
-    }}
-    .source-list {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 8px;
-    }}
-    .source-list label {{
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.95rem;
-    }}
-    input[type="number"] {{
-      width: 100%;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      padding: 10px 12px;
-      font: inherit;
-      background: #fffdf9;
-    }}
-    .actions {{
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      margin-top: 6px;
-    }}
-    button[type="submit"] {{
-      border: 0;
-      border-radius: 999px;
-      background: var(--accent);
-      color: white;
-      padding: 12px 18px;
-      font: inherit;
-      cursor: pointer;
-    }}
-    pre {{
-      margin: 0;
-      padding: 18px 20px 22px;
-      white-space: pre-wrap;
-      word-break: break-word;
-      overflow-wrap: anywhere;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.9rem;
-      line-height: 1.5;
-      background: #fffdfa;
-    }}
-    .output-pre a {{
-      color: var(--accent);
-      text-decoration-thickness: 1px;
-      text-underline-offset: 2px;
-    }}
-    .error-panel pre {{
-      color: var(--danger);
-    }}
-    .result-panel {{
-      min-height: 640px;
-    }}
+    .shell {{ width: min(1180px,calc(100vw - 32px)); margin: 24px auto 40px; display: grid; gap: 18px; }}
+    .hero {{ background: var(--surface); border: 1px solid var(--border); border-radius: 22px;
+             padding: 28px; box-shadow: var(--shadow); }}
+    .hero h1 {{ margin: 0 0 8px; font-size: clamp(2rem,4vw,3.2rem); line-height: 0.95; letter-spacing: -0.04em; }}
+    .hero p {{ margin: 0; max-width: 780px; color: var(--muted); font-size: 1.02rem; }}
+    .grid {{ display: grid; grid-template-columns: minmax(300px,420px) minmax(0,1fr); gap: 18px; align-items: start; }}
+    .panel {{ background: var(--surface-strong); border: 1px solid var(--border); border-radius: 22px;
+              box-shadow: var(--shadow); overflow: hidden; }}
+    .panel-header {{ padding: 18px 20px 0; }}
+    .panel-header h2 {{ margin: 0; font-size: 1rem; letter-spacing: 0.02em;
+                        text-transform: uppercase; color: var(--muted); }}
+    .panel-body {{ padding: 18px 20px 20px; }}
+    label.block {{ display: block; margin-bottom: 10px; font-size: 0.92rem; color: var(--muted); }}
+    textarea {{ width: 100%; min-height: 170px; border-radius: 16px; border: 1px solid var(--border);
+               padding: 14px 16px; font: inherit; resize: vertical; background: #fffdf9; color: var(--text); }}
+    input[type="text"] {{ width: 100%; border-radius: 12px; border: 1px solid var(--border);
+                          padding: 10px 12px; font: inherit; background: #fffdf9; color: var(--text); margin-bottom: 12px; }}
+    .modes {{ display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 8px; margin-bottom: 16px; }}
+    .mode-card {{ display: flex; align-items: center; justify-content: center; gap: 6px;
+                  padding: 10px 8px; border: 1px solid var(--border); border-radius: 14px;
+                  background: #fffcf7; cursor: pointer; font-size: 0.82rem; text-align: center; }}
+    .mode-card input {{ accent-color: var(--accent); flex: 0 0 auto; }}
+    .mode-card span {{ line-height: 1.15; overflow-wrap: anywhere; }}
+    .follow-card {{ border-color: var(--accent); background: var(--accent-soft); }}
+    .controls {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }}
+    .control-box {{ padding: 12px 14px; border-radius: 16px; border: 1px solid var(--border); background: #fffcf7; }}
+    .source-list {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }}
+    .source-list label {{ display: flex; align-items: center; gap: 8px; font-size: 0.95rem; }}
+    input[type="number"] {{ width: 100%; border-radius: 12px; border: 1px solid var(--border);
+                            padding: 10px 12px; font: inherit; background: #fffdf9; }}
+    .actions {{ display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }}
+    button[type="submit"] {{ border: 0; border-radius: 999px; background: var(--accent);
+                             color: white; padding: 12px 22px; font: inherit; cursor: pointer; font-size: 1rem; }}
+    pre {{ margin: 0; padding: 18px 20px 22px; white-space: pre-wrap; word-break: break-word;
+           font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+           font-size: 0.9rem; line-height: 1.5; background: #fffdfa; }}
+    .error-panel pre {{ color: var(--danger); }}
+    .result-panel {{ min-height: 640px; }}
+    .session-hint {{ font-size: 0.82rem; color: var(--muted); margin-top: 6px; }}
     @media (max-width: 920px) {{
-      .grid {{
-        grid-template-columns: 1fr;
-      }}
-      .modes {{
-        grid-template-columns: 1fr;
-      }}
-      .controls {{
-        grid-template-columns: 1fr;
-      }}
+      .grid,.modes,.controls {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
 <body>
   <main class="shell">
     <section class="hero">
-      <h1>Dynatrace Support MCP</h1>
-      <p>Validate triage quality in the browser, without remembering CLI commands. Paste a real support case, switch between triage, investigation plan, and customer response, and share the output with teammates for quick review.</p>
+      <h1>TraceSage 2.0</h1>
+      <p>Paste a real support case, pick a mode, run analysis — then use <strong>Follow Up</strong> to continue the conversation with the Session ID.</p>
     </section>
     <section class="grid">
       <form class="panel" method="post">
-        <div class="panel-header">
-          <h2>Case Input</h2>
-        </div>
+        <div class="panel-header"><h2>Case Input</h2></div>
         <div class="panel-body">
-          <div class="modes">
-            {''.join(mode_cards)}
+
+          <div class="modes">{_mode_cards(mode)}</div>
+
+          <!-- Normal case input (hidden when Follow Up) -->
+          <div id="case-input" {'style="display:none"' if is_follow_up else ''}>
+            <label class="block" for="problem_statement">Customer issue</label>
+            <textarea id="problem_statement" name="problem_statement"
+              placeholder="Paste a real support case here...">{html.escape(problem_statement)}</textarea>
           </div>
 
-          <label class="block" for="problem_statement">Customer issue</label>
-          <textarea id="problem_statement" name="problem_statement" placeholder="Paste a real support case here...">{html.escape(problem_statement)}</textarea>
+          <!-- Follow Up input (hidden unless Follow Up mode) -->
+          <div id="followup-input" {'style="display:none"' if not is_follow_up else ''}>
+            <label class="block" for="session_id">Session ID</label>
+            <input type="text" id="session_id" name="session_id"
+              placeholder="e.g. 5998bce0-ae8"
+              value="{html.escape(session_id)}">
+            <label class="block" for="follow_up_message">Your follow-up message</label>
+            <textarea id="follow_up_message" name="follow_up_message"
+              placeholder="Add new info, ask a question, or say what changed..."
+              style="min-height:120px">{html.escape(follow_up_message)}</textarea>
+            <p class="session-hint">The Session ID is shown at the bottom of every result. Paste it here to continue the conversation.</p>
+          </div>
 
-          <div class="controls">
+          <div class="controls" style="margin-top:14px">
             <div class="control-box">
               <div>Sources</div>
               <div class="source-list">
-                {''.join(source_options)}
+                <label><input type="checkbox" name="sources" value="docs" {source_docs}> Docs</label>
+                <label><input type="checkbox" name="sources" value="community" {source_community}> Community</label>
               </div>
             </div>
             <div class="control-box">
@@ -345,78 +231,108 @@ def render_page(
         </div>
       </form>
 
-      {output_html or '''
-      <section class="panel result-panel">
-        <div class="panel-header">
-          <h2>Result</h2>
-        </div>
-        <pre>Your result will appear here after you run the MCP analysis.</pre>
-      </section>
-      '''}
+      {_output_panel(output, error, problem_statement)}
     </section>
   </main>
+  <script>
+    function toggleMode() {{
+      const mode = document.querySelector('input[name="mode"]:checked').value;
+      const isFollowUp = mode === 'follow_up';
+      document.getElementById('case-input').style.display = isFollowUp ? 'none' : '';
+      document.getElementById('followup-input').style.display = isFollowUp ? '' : 'none';
+    }}
+  </script>
 </body>
-</html>
-"""
+</html>"""
 
 
 class MCPUIHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        page = render_page()
-        self._send_html(page)
+        self._send_html(render_page())
 
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length).decode("utf-8")
-        payload = parse_qs(raw)
+        payload = parse_qs(self.rfile.read(length).decode("utf-8"))
 
-        problem_statement = payload.get("problem_statement", [""])[0].strip()
-        sources = payload.get("sources", list(SEARCH_SOURCES))
+        if self.path == "/feedback":
+            fb_type = payload.get("fb_type", [""])[0]
+            problem = payload.get("fb_problem", [""])[0].strip()
+            area = payload.get("fb_area", [""])[0].strip()
+            store = get_feedback_store()
+            if fb_type == "correction":
+                wrong = payload.get("fb_wrong", [""])[0].strip()
+                correct = payload.get("fb_correct", [""])[0].strip()
+                if problem and correct:
+                    store.add_correction(problem, wrong, correct, area)
+                    msg = "Correction saved. It will be applied to future similar queries."
+                else:
+                    msg = "Please fill in both the problem and the correct information."
+            elif fb_type == "confirmation":
+                confirm = payload.get("fb_confirm", [""])[0].strip()
+                if problem and confirm:
+                    store.add_confirmation(problem, confirm, area)
+                    msg = "Confirmation saved. This will reinforce the answer for similar queries."
+                else:
+                    msg = "Please fill in both the problem and what was confirmed correct."
+            else:
+                msg = "Unknown feedback type."
+            self._send_html(render_page(output=msg))
+            return
+
         mode = payload.get("mode", ["triage"])[0]
-        max_results_raw = payload.get("max_results", ["6"])[0]
-
+        sources = payload.get("sources", ["docs", "community"]) or ["docs", "community"]
         try:
-            max_results = max(1, min(10, int(max_results_raw)))
+            max_results = max(1, min(10, int(payload.get("max_results", ["6"])[0])))
         except ValueError:
             max_results = 6
 
+        if mode == "follow_up":
+            session_id = payload.get("session_id", [""])[0].strip()
+            message = payload.get("follow_up_message", [""])[0].strip()
+            if not session_id or not message:
+                self._send_html(render_page(
+                    mode=mode, sources=sources, max_results=max_results,
+                    session_id=session_id, follow_up_message=message,
+                    error="Please enter both a Session ID and a follow-up message.",
+                ))
+                return
+            try:
+                output = build_follow_up_text(session_id, message, sources, max_results)
+                self._send_html(render_page(
+                    mode=mode, sources=sources, max_results=max_results,
+                    session_id=session_id, follow_up_message=message, output=output,
+                ))
+            except Exception as exc:
+                self._send_html(render_page(
+                    mode=mode, sources=sources, max_results=max_results,
+                    session_id=session_id, follow_up_message=message, error=str(exc),
+                ))
+            return
+
+        problem_statement = payload.get("problem_statement", [""])[0].strip()
         if mode not in OUTPUT_MODES:
             mode = "triage"
 
-        if not sources:
-            sources = list(SEARCH_SOURCES)
-
         if not problem_statement:
-            page = render_page(
-                problem_statement=problem_statement,
-                sources=sources,
-                mode=mode,
-                max_results=max_results,
-                error="Please enter a customer issue before running the MCP analysis.",
-            )
-            self._send_html(page)
+            self._send_html(render_page(
+                problem_statement=problem_statement, sources=sources,
+                mode=mode, max_results=max_results,
+                error="Please enter a customer issue before running the analysis.",
+            ))
             return
 
         try:
             _, builder = OUTPUT_MODES[mode]
             output = builder(problem_statement, sources, max_results)
-            page = render_page(
-                problem_statement=problem_statement,
-                sources=sources,
-                mode=mode,
-                max_results=max_results,
-                output=output,
-            )
+            self._send_html(render_page(
+                problem_statement=problem_statement, sources=sources,
+                mode=mode, max_results=max_results, output=output,
+            ))
         except Exception as exc:
-            page = render_page(
-                problem_statement=problem_statement,
-                sources=sources,
-                mode=mode,
-                max_results=max_results,
-                error=str(exc),
-            )
-
-        self._send_html(page)
+            self._send_html(render_page(
+                problem_statement=problem_statement, sources=sources,
+                mode=mode, max_results=max_results, error=str(exc),
+            ))
 
     def log_message(self, format: str, *args: object) -> None:
         return

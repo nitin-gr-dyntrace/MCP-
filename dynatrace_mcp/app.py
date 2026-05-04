@@ -1069,25 +1069,12 @@ ENTITY_MITIGATION_HINTS = {
 }
 
 
-def entity_questions_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
-    questions: list[str] = []
-    for signal in diagnosis.entity_signals:
-        questions.extend(ENTITY_QUESTION_HINTS.get(signal, []))
-    return list(dict.fromkeys(questions))
+def _from_signals(diagnosis: Diagnosis, table: dict[str, list[str]]) -> list[str]:
+    return list(dict.fromkeys(item for s in diagnosis.entity_signals for item in table.get(s, [])))
 
-
-def entity_evidence_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
-    evidence: list[str] = []
-    for signal in diagnosis.entity_signals:
-        evidence.extend(ENTITY_EVIDENCE_HINTS.get(signal, []))
-    return list(dict.fromkeys(evidence))
-
-
-def entity_mitigations_from_diagnosis(diagnosis: Diagnosis) -> list[str]:
-    mitigations: list[str] = []
-    for signal in diagnosis.entity_signals:
-        mitigations.extend(ENTITY_MITIGATION_HINTS.get(signal, []))
-    return list(dict.fromkeys(mitigations))
+def entity_questions_from_diagnosis(d: Diagnosis) -> list[str]: return _from_signals(d, ENTITY_QUESTION_HINTS)
+def entity_evidence_from_diagnosis(d: Diagnosis) -> list[str]: return _from_signals(d, ENTITY_EVIDENCE_HINTS)
+def entity_mitigations_from_diagnosis(d: Diagnosis) -> list[str]: return _from_signals(d, ENTITY_MITIGATION_HINTS)
 
 def generic_questions_for_diagnosis(diagnosis: Diagnosis) -> list[str]:
     if diagnosis.subdomain_confidence >= 0.8:
@@ -1314,10 +1301,12 @@ def build_customer_response_draft(problem_statement: str, diagnosis: Diagnosis, 
     return "\n".join(body)
 
 
+def _resolve_session(session_id: str) -> Session:
+    return (load_session(session_id) or create_session()) if session_id else create_session()
+
+
 def build_triage_text(problem_statement: str, sources: list[str], max_results: int, session_id: str = "") -> str:
-    session = load_session(session_id) if session_id else create_session()
-    if session is None:
-        session = create_session()
+    session = _resolve_session(session_id)
 
     learned = inject_learned_context(problem_statement)
     diagnosis = diagnose_problem(problem_statement)
@@ -1390,9 +1379,7 @@ def build_triage_text(problem_statement: str, sources: list[str], max_results: i
 
 
 def build_bug_escalation_text(problem_statement: str, sources: list[str], max_results: int, session_id: str = "") -> str:
-    session = load_session(session_id) if session_id else create_session()
-    if session is None:
-        session = create_session()
+    session = _resolve_session(session_id)
 
     learned = inject_learned_context(problem_statement)
     diagnosis = diagnose_problem(problem_statement)
@@ -1434,9 +1421,7 @@ def build_bug_escalation_text(problem_statement: str, sources: list[str], max_re
 
 
 def build_customer_response_text(problem_statement: str, sources: list[str], max_results: int, session_id: str = "") -> str:
-    session = load_session(session_id) if session_id else create_session()
-    if session is None:
-        session = create_session()
+    session = _resolve_session(session_id)
 
     learned = inject_learned_context(problem_statement)
     diagnosis = diagnose_problem(problem_statement)
@@ -1453,9 +1438,7 @@ def build_customer_response_text(problem_statement: str, sources: list[str], max
 
 
 def build_investigation_plan_text(problem_statement: str, sources: list[str], max_results: int, session_id: str = "") -> str:
-    session = load_session(session_id) if session_id else create_session()
-    if session is None:
-        session = create_session()
+    session = _resolve_session(session_id)
 
     learned = inject_learned_context(problem_statement)
     diagnosis = diagnose_problem(problem_statement)
@@ -1563,6 +1546,21 @@ def build_follow_up_text(session_id: str, message: str, sources: list[str], max_
     output = "\n".join(parts)
     append_turn(session, "follow_up", message, output, diagnosis.product_area, diagnosis.severity)
     return output + session_footer(session)
+
+
+def _problem_args(arguments: dict[str, Any]) -> tuple[str, str, list[str], int]:
+    problem = str(arguments.get("problemStatement", "")).strip()
+    if not problem:
+        raise ValueError("problemStatement is required")
+    notes = str(arguments.get("caseNotes", "")).strip()
+    if notes:
+        problem = f"{problem}\n\nAdditional context: {notes}"
+    return (
+        problem,
+        str(arguments.get("sessionId", "")).strip(),
+        normalize_sources(arguments.get("sources")),
+        max(1, min(int(arguments.get("maxResults", 5)), 10)),
+    )
 
 
 def normalize_sources(value: Any) -> list[str]:
@@ -2036,49 +2034,17 @@ def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             )
         )
 
-    if name == "analyze_customer_concern":
-        problem_statement = str(arguments.get("problemStatement", "")).strip()
-        if not problem_statement:
-            raise ValueError("problemStatement is required")
-        sources = normalize_sources(arguments.get("sources"))
-        max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
-        return tool_result(build_triage_text(problem_statement, sources, max_results))
-
-    if name == "triage_case":
-        problem_statement = str(arguments.get("problemStatement", "")).strip()
-        if not problem_statement:
-            raise ValueError("problemStatement is required")
-        case_notes = str(arguments.get("caseNotes", "")).strip()
-        if case_notes:
-            problem_statement = f"{problem_statement}\n\nAdditional context: {case_notes}"
-        session_id = str(arguments.get("sessionId", "")).strip()
-        sources = normalize_sources(arguments.get("sources"))
-        max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
-        return tool_result(build_triage_text(problem_statement, sources, max_results, session_id))
+    if name in {"analyze_customer_concern", "triage_case"}:
+        problem, session_id, sources, max_results = _problem_args(arguments)
+        return tool_result(build_triage_text(problem, sources, max_results, session_id))
 
     if name == "build_bug_escalation":
-        problem_statement = str(arguments.get("problemStatement", "")).strip()
-        if not problem_statement:
-            raise ValueError("problemStatement is required")
-        case_notes = str(arguments.get("caseNotes", "")).strip()
-        if case_notes:
-            problem_statement = f"{problem_statement}\n\nAdditional context: {case_notes}"
-        session_id = str(arguments.get("sessionId", "")).strip()
-        sources = normalize_sources(arguments.get("sources"))
-        max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
-        return tool_result(build_bug_escalation_text(problem_statement, sources, max_results, session_id))
+        problem, session_id, sources, max_results = _problem_args(arguments)
+        return tool_result(build_bug_escalation_text(problem, sources, max_results, session_id))
 
     if name == "build_customer_response":
-        problem_statement = str(arguments.get("problemStatement", "")).strip()
-        if not problem_statement:
-            raise ValueError("problemStatement is required")
-        case_notes = str(arguments.get("caseNotes", "")).strip()
-        if case_notes:
-            problem_statement = f"{problem_statement}\n\nAdditional context: {case_notes}"
-        session_id = str(arguments.get("sessionId", "")).strip()
-        sources = normalize_sources(arguments.get("sources"))
-        max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
-        return tool_result(build_customer_response_text(problem_statement, sources, max_results, session_id))
+        problem, session_id, sources, max_results = _problem_args(arguments)
+        return tool_result(build_customer_response_text(problem, sources, max_results, session_id))
 
     if name == "prime_topic_cache":
         query = str(arguments.get("query", "")).strip()
@@ -2099,16 +2065,8 @@ def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         )
 
     if name == "build_investigation_plan":
-        problem_statement = str(arguments.get("problemStatement", "")).strip()
-        if not problem_statement:
-            raise ValueError("problemStatement is required")
-        case_notes = str(arguments.get("caseNotes", "")).strip()
-        if case_notes:
-            problem_statement = f"{problem_statement}\n\nAdditional context: {case_notes}"
-        session_id = str(arguments.get("sessionId", "")).strip()
-        sources = normalize_sources(arguments.get("sources"))
-        max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
-        return tool_result(build_investigation_plan_text(problem_statement, sources, max_results, session_id))
+        problem, session_id, sources, max_results = _problem_args(arguments)
+        return tool_result(build_investigation_plan_text(problem, sources, max_results, session_id))
 
     if name == "follow_up":
         session_id = str(arguments.get("sessionId", "")).strip()
