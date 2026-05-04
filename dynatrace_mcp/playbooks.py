@@ -6,15 +6,23 @@ from typing import Any
 from .config import PLAYBOOKS_PATH
 from .models import Playbook
 
+_playbooks_cache: list[Playbook] | None = None
+
 
 def load_playbooks() -> list[Playbook]:
+    global _playbooks_cache
+    if _playbooks_cache is not None:
+        return _playbooks_cache
+
     if not PLAYBOOKS_PATH.exists():
-        return []
+        _playbooks_cache = []
+        return _playbooks_cache
 
     try:
         raw = json.loads(PLAYBOOKS_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return []
+        _playbooks_cache = []
+        return _playbooks_cache
 
     playbooks: list[Playbook] = []
     for item in raw:
@@ -34,7 +42,15 @@ def load_playbooks() -> list[Playbook]:
                 escalate_when=_as_list(item.get("escalate_when")),
             )
         )
-    return playbooks
+    _playbooks_cache = playbooks
+    return _playbooks_cache
+
+
+def reload_playbooks() -> list[Playbook]:
+    """Force re-read from disk, e.g. after editing playbooks.json at runtime."""
+    global _playbooks_cache
+    _playbooks_cache = None
+    return load_playbooks()
 
 
 def _as_text(value: Any) -> str:

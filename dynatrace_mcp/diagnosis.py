@@ -29,6 +29,10 @@ SUBDOMAIN_RULES: dict[str, list[dict[str, object]]] = {
         {"name": "Extension Runtime", "keywords": ["extension", "activation", "runtime", "controller", "plugin", "unhealthy"]},
         {"name": "Extension Compatibility", "keywords": ["upgrade", "version", "compatibility", "supported"]},
     ],
+    "Grail / DQL": [
+        {"name": "DQL Query", "keywords": ["dql", "fetch", "summarize", "fieldsadd", "query", "syntax", "notebook", "data explorer"]},
+        {"name": "Grail Retention", "keywords": ["retention", "bucket", "delete", "expire", "policy", "storage"]},
+    ],
 }
 
 
@@ -46,6 +50,12 @@ ENTITY_SIGNAL_RULES: list[tuple[str, list[str]]] = [
 
 def tokenize(value: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]+", value.lower()) if len(token) > 1]
+
+
+def _score_playbook(problem_lower: str, playbook: "Playbook") -> float:
+    score = sum(7.0 if " " in t else 5.0 for t in playbook.triggers if t.lower() in problem_lower)
+    score += sum(2.0 for k in playbook.keywords if k.lower() in problem_lower)
+    return score
 
 
 def classify_concern(problem_statement: str) -> list[str]:
@@ -67,11 +77,15 @@ def classify_concern(problem_statement: str) -> list[str]:
 
 def estimate_severity(problem_statement: str, concern_types: list[str]) -> str:
     lower = problem_statement.lower()
-    if "customer_environment_impact" in concern_types and re.search(
+    has_impact = "customer_environment_impact" in concern_types
+    has_bug = "possible_bug_for_engineering" in concern_types
+    if has_impact and has_bug:
+        return "high"
+    if has_impact and re.search(
         r"production|outage|critical|all hosts|tenant down|cluster down|blocked", lower
     ):
         return "high"
-    if "product_not_working" in concern_types or "customer_environment_impact" in concern_types:
+    if "product_not_working" in concern_types or has_impact:
         return "medium"
     return "normal"
 
@@ -154,48 +168,28 @@ def product_area_candidates(problem_statement: str) -> list[tuple[float, str, di
     return candidates
 
 
-def playbook_confidence_for_area(problem_statement: str, product_area: str) -> dict[str, float]:
+def _scored_playbooks_for_area(problem_statement: str, product_area: str) -> list[tuple[float, Playbook]]:
     lower = problem_statement.lower()
-    confidence: dict[str, float] = {}
-
+    results: list[tuple[float, Playbook]] = []
     for playbook in load_playbooks():
         if playbook.product_area != product_area:
             continue
-
-        score = 0.0
-        for trigger in playbook.triggers:
-            if trigger.lower() in lower:
-                score += 7.0 if " " in trigger else 5.0
-        for keyword in playbook.keywords:
-            if keyword.lower() in lower:
-                score += 2.0
-
+        score = _score_playbook(lower, playbook)
         if score > 0:
-            confidence[playbook.id] = min(0.98, 0.2 + (score / 24.0))
+            results.append((score, playbook))
+    results.sort(key=lambda item: item[0], reverse=True)
+    return results
 
-    return confidence
+
+def playbook_confidence_for_area(problem_statement: str, product_area: str) -> dict[str, float]:
+    return {
+        playbook.id: min(0.98, 0.2 + (score / 24.0))
+        for score, playbook in _scored_playbooks_for_area(problem_statement, product_area)
+    }
 
 
 def matched_playbooks_for_area(problem_statement: str, product_area: str) -> list[Playbook]:
-    lower = problem_statement.lower()
-    matches: list[tuple[float, Playbook]] = []
-
-    for playbook in load_playbooks():
-        if playbook.product_area != product_area:
-            continue
-
-        score = 0.0
-        for trigger in playbook.triggers:
-            if trigger.lower() in lower:
-                score += 7.0 if " " in trigger else 5.0
-        for keyword in playbook.keywords:
-            if keyword.lower() in lower:
-                score += 2.0
-        if score > 0:
-            matches.append((score, playbook))
-
-    matches.sort(key=lambda item: item[0], reverse=True)
-    return [playbook for _, playbook in matches[:2]]
+    return [playbook for _, playbook in _scored_playbooks_for_area(problem_statement, product_area)[:2]]
 
 
 def diagnose_problem(problem_statement: str) -> Diagnosis:

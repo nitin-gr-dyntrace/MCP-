@@ -71,7 +71,10 @@ SUPPORT_SYNONYMS = {
     "synthetic": ["synthetic monitoring", "browser clickpath", "api synthetic"],
     "extension framework": ["extension", "extensions", "custom extension"],
     "logs": ["log", "logging", "grail logs"],
-    "grail": ["dql", "logs", "security investigator"],
+    "grail": ["dql", "logs", "security investigator", "dynatrace query language", "data explorer", "notebook"],
+    "dql": ["grail", "dynatrace query language", "fetch", "summarize", "fieldsadd"],
+    "notebook": ["grail", "dql", "data explorer"],
+    "retention": ["bucket", "grail", "data retention", "ingestion"],
 }
 
 PRODUCT_AREA_PROFILES = [
@@ -209,6 +212,21 @@ PRODUCT_AREA_PROFILES = [
             "Expected versus actual alert behavior examples",
         ],
         "risks": ["alert fatigue", "missed incident detection"],
+    },
+    {
+        "name": "Grail / DQL",
+        "keywords": ["grail", "dql", "dynatrace query language", "notebook", "data explorer", "fetch", "summarize", "fieldsadd", "bucket", "retention"],
+        "questions": [
+            "Is the issue with query syntax, unexpected results, or missing data in Grail?",
+            "Which data type is being queried: logs, metrics, events, spans, or entities?",
+            "Did a schema, retention policy, or ingest pipeline change precede the issue?",
+        ],
+        "evidence": [
+            "Full DQL query text and error message or unexpected output",
+            "Expected versus actual result set",
+            "Relevant retention bucket and time range",
+        ],
+        "risks": ["data not queryable", "incorrect analysis or alerting based on bad query results"],
     },
 ]
 

@@ -7,6 +7,7 @@ import argparse
 import socket
 import gzip
 import math
+import time
 from collections import Counter
 from html import unescape
 from html.parser import HTMLParser
@@ -296,7 +297,15 @@ def iter_loc_elements(root: ElementTree.Element) -> list[str]:
     return locations
 
 
+_sitemap_cache: dict[str, tuple[float, list[str]]] = {}
+_SITEMAP_TTL = 3600.0
+
+
 def fetch_sitemap_urls(source: str, visited: set[str] | None = None) -> list[str]:
+    cached_at, cached_urls = _sitemap_cache.get(source, (0.0, []))
+    if cached_urls and (time.time() - cached_at) < _SITEMAP_TTL:
+        return cached_urls
+
     sitemap_url = SITEMAP_URLS[source]
     pending = [sitemap_url]
     visited_urls = visited or set()
@@ -324,6 +333,7 @@ def fetch_sitemap_urls(source: str, visited: set[str] | None = None) -> list[str
             except ValueError:
                 continue
 
+    _sitemap_cache[source] = (time.time(), discovered)
     return discovered
 
 
@@ -347,10 +357,12 @@ def score_url_for_query(url: str, query: str) -> int:
             score += 10
 
     path = urlparse(url).path.lower()
-    if "oneagent" in terms and "oneagent" in path:
-        score += 15
-    if "kubernetes" in terms and "kubernetes" in path:
-        score += 15
+    for profile in PRODUCT_AREA_PROFILES:
+        for kw in profile["keywords"]:
+            slug = kw.replace(" ", "-")
+            if kw in terms and (slug in path or kw in path):
+                score += 15
+                break
 
     score += int(page_type_penalty(page_type))
     score += int(source_type_boost(source, page_type, url))
@@ -370,9 +382,10 @@ def diagnosis_url_bias(url: str, diagnosis: Diagnosis | None) -> float:
         if keyword in path:
             score += 5.0 if " " in keyword else 2.5
 
-    subdomain = diagnosis.subdomain.lower()
-    if subdomain in path:
-        score += 10.0
+    if diagnosis.subdomain_confidence > 0.5:
+        subdomain = diagnosis.subdomain.lower()
+        if subdomain in path:
+            score += 10.0
 
     if diagnosis.product_area == "DEM":
         if diagnosis.subdomain == "RUM Capture":
@@ -1654,6 +1667,10 @@ def list_tools() -> dict[str, Any]:
                             "type": "string",
                             "description": "Short description of the customer issue.",
                         },
+                        "caseNotes": {
+                            "type": "string",
+                            "description": "Optional additional context such as prior replies, version numbers, or log snippets.",
+                        },
                         "sources": {
                             "type": "array",
                             "items": {
@@ -1680,6 +1697,10 @@ def list_tools() -> dict[str, Any]:
                             "type": "string",
                             "description": "Customer issue summary for escalation.",
                         },
+                        "caseNotes": {
+                            "type": "string",
+                            "description": "Optional additional context such as prior replies, version numbers, or log snippets.",
+                        },
                         "sources": {
                             "type": "array",
                             "items": {
@@ -1705,6 +1726,10 @@ def list_tools() -> dict[str, Any]:
                         "problemStatement": {
                             "type": "string",
                             "description": "Customer issue summary.",
+                        },
+                        "caseNotes": {
+                            "type": "string",
+                            "description": "Optional additional context such as prior replies, version numbers, or log snippets.",
                         },
                         "sources": {
                             "type": "array",
@@ -1757,6 +1782,10 @@ def list_tools() -> dict[str, Any]:
                         "problemStatement": {
                             "type": "string",
                             "description": "Customer issue summary.",
+                        },
+                        "caseNotes": {
+                            "type": "string",
+                            "description": "Optional additional context such as prior replies, version numbers, or log snippets.",
                         },
                         "sources": {
                             "type": "array",
@@ -1836,6 +1865,9 @@ def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         problem_statement = str(arguments.get("problemStatement", "")).strip()
         if not problem_statement:
             raise ValueError("problemStatement is required")
+        case_notes = str(arguments.get("caseNotes", "")).strip()
+        if case_notes:
+            problem_statement = f"{problem_statement}\n\nAdditional context: {case_notes}"
         sources = normalize_sources(arguments.get("sources"))
         max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
         return tool_result(build_triage_text(problem_statement, sources, max_results))
@@ -1844,6 +1876,9 @@ def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         problem_statement = str(arguments.get("problemStatement", "")).strip()
         if not problem_statement:
             raise ValueError("problemStatement is required")
+        case_notes = str(arguments.get("caseNotes", "")).strip()
+        if case_notes:
+            problem_statement = f"{problem_statement}\n\nAdditional context: {case_notes}"
         sources = normalize_sources(arguments.get("sources"))
         max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
         return tool_result(build_bug_escalation_text(problem_statement, sources, max_results))
@@ -1852,6 +1887,9 @@ def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         problem_statement = str(arguments.get("problemStatement", "")).strip()
         if not problem_statement:
             raise ValueError("problemStatement is required")
+        case_notes = str(arguments.get("caseNotes", "")).strip()
+        if case_notes:
+            problem_statement = f"{problem_statement}\n\nAdditional context: {case_notes}"
         sources = normalize_sources(arguments.get("sources"))
         max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
         return tool_result(build_customer_response_text(problem_statement, sources, max_results))
@@ -1878,6 +1916,9 @@ def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         problem_statement = str(arguments.get("problemStatement", "")).strip()
         if not problem_statement:
             raise ValueError("problemStatement is required")
+        case_notes = str(arguments.get("caseNotes", "")).strip()
+        if case_notes:
+            problem_statement = f"{problem_statement}\n\nAdditional context: {case_notes}"
         sources = normalize_sources(arguments.get("sources"))
         max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
         return tool_result(build_investigation_plan_text(problem_statement, sources, max_results))
