@@ -29,6 +29,13 @@ from .config import (
 from .diagnosis import classify_concern, diagnose_problem, matched_product_profiles
 from .feedback import get_feedback_store, inject_learned_context
 from .models import ConnectorDocument, CorpusEntry, Diagnosis, SearchResult
+from .llm import (
+    generate_bug_escalation,
+    generate_customer_response,
+    generate_investigation_plan,
+    generate_triage_analysis,
+    is_llm_available,
+)
 from .session import (
     Session,
     append_turn,
@@ -1305,6 +1312,55 @@ def _resolve_session(session_id: str) -> Session:
     return (load_session(session_id) or create_session()) if session_id else create_session()
 
 
+def build_feature_gap_triage(
+    problem_statement: str,
+    diagnosis: "Diagnosis",
+    results: list["SearchResult"],
+    learned: str,
+    session: "Session",
+) -> str:
+    playbooks = diagnosis.matched_playbooks
+    workarounds = playbook_mitigations_from_diagnosis(diagnosis)
+    escalation_items = escalation_criteria_from_diagnosis(diagnosis)
+    questions = [q for playbook in playbooks for q in playbook.questions][:4]
+    evidence = [e for playbook in playbooks for e in playbook.evidence][:4]
+    source_insight = compare_results_by_source(results)
+
+    parts: list[str] = []
+    if learned:
+        parts += [learned, ""]
+    parts += [
+        f"Problem statement: {problem_statement}",
+        f"Concern type: feature_gap — this is a product limitation, not a defect",
+        f"Affected area: {diagnosis.product_area} / {diagnosis.subdomain}",
+        f"Estimated severity: {diagnosis.severity}",
+        f"Matched playbook: {', '.join(p.title for p in playbooks) if playbooks else 'None'}",
+        f"Source insight: {source_insight}",
+        "",
+        "What this means:",
+        "- The customer is hitting a feature that is not yet available or not supported in their tenant type.",
+        "- This is not a bug. Do not open a defect. The path forward is workaround, communication, and escalation if business impact is high.",
+        "",
+        "Key questions to ask:",
+        *(([f"- {q}" for q in questions]) or ["- Has the customer been informed this feature is not yet available and what the expected timeline is?"]),
+        "",
+        "Evidence to gather:",
+        *(([f"- {e}" for e in evidence]) or ["- Tenant type (gen3 vs classic), affected feature name, and business impact timeline."]),
+        "",
+        "Available workarounds:",
+        *(([f"- {w}" for w in workarounds]) or ["- Check Workflows or API-based alternatives and assess whether they fit the customer's contract."]),
+        "",
+        "Escalate when:",
+        *(([f"- {item}" for item in escalation_items]) or ["- Customer has a hard deadline that cannot be met with any available workaround."]),
+        "",
+        "Relevant references:",
+        format_results(results),
+    ]
+    output = "\n".join(parts)
+    append_turn(session, "triage_case", problem_statement, output, diagnosis.product_area, diagnosis.severity)
+    return output + session_footer(session)
+
+
 def build_triage_text(problem_statement: str, sources: list[str], max_results: int, session_id: str = "") -> str:
     session = _resolve_session(session_id)
 
@@ -1314,6 +1370,10 @@ def build_triage_text(problem_statement: str, sources: list[str], max_results: i
     component = diagnosis.product_area
     severity = diagnosis.severity
     results = search_knowledge(problem_statement, sources, max_results, diagnosis)
+
+    if "feature_gap" in concern_types and "product_not_working" not in concern_types:
+        return build_feature_gap_triage(problem_statement, diagnosis, results, learned, session)
+
     questions = investigation_questions_from_diagnosis(problem_statement, diagnosis)
     actions = recommended_actions(concern_types, component)
     hypotheses = generate_hypotheses_from_diagnosis(diagnosis)

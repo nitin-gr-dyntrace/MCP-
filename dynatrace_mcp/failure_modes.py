@@ -281,6 +281,19 @@ PRODUCT_AREA_FAILURE_WEIGHTS: dict[str, dict[str, float]] = {
         "visualization_query_mismatch": 0.7,
         "regression_platform": 0.6,
     },
+    "Cloud Integration": {
+        "authentication_permissions": 1.0,
+        "configuration_drift": 0.9,
+        "connectivity_tls": 0.6,
+        "compatibility_mismatch": 0.5,
+        "regression_platform": 0.4,
+    },
+    "Grail / DQL": {
+        "visualization_query_mismatch": 1.0,
+        "ingestion_pipeline": 0.7,
+        "configuration_drift": 0.6,
+        "regression_platform": 0.5,
+    },
 }
 
 

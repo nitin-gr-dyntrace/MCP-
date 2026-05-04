@@ -343,5 +343,70 @@
       "Documented configuration and telemetry are correct but correlation remains incorrect",
       "A reproducible Davis regression appears after a version or platform change"
     ]
+  },
+  {
+    "id": "cloud_integration_iam_or_connectivity",
+    "product_area": "Cloud Integration",
+    "title": "AWS or cloud integration showing pending or authorization errors",
+    "triggers": ["aws", "pending", "authorization error", "iam", "forbidden", "cloud integration", "connection status"],
+    "keywords": ["iam", "policy", "role", "forbidden", "datasync", "kms", "cloudwatch", "credentials", "trust", "pending", "disconnect", "lapse"],
+    "failure_domains": [
+      "IAM role or policy changed or detached after initial setup",
+      "AWS service-level permission missing for specific actions like datasync or kms",
+      "Classic extension page showing stale status while new UI reflects current state"
+    ],
+    "questions": [
+      "When did the connection status change to pending, and was there any AWS policy or role change around that time?",
+      "Do the authorization errors point to a specific AWS service (datasync, kms) or all services?",
+      "Is the IAM role still attached to the Dynatrace integration and does its trust policy still allow the Dynatrace AWS account?",
+      "Does the new settings UI show the connections as healthy while the classic extension page shows pending?"
+    ],
+    "evidence": [
+      "IAM role ARN and the attached policies as they stand today",
+      "CloudTrail logs for changes to the IAM role or policies around the time the issue started",
+      "Full authorization error text including the exact IAM action and resource ARN",
+      "Screenshot of connection status from both the classic Extensions page and the new Settings UI"
+    ],
+    "mitigations": [
+      "Verify the IAM role trust policy still allows the correct Dynatrace AWS account principal",
+      "Re-attach any missing service-specific permissions for the actions listed in the authorization errors",
+      "If classic and new UI disagree on status, rely on the new Settings UI and check if a re-sync resolves the classic view"
+    ],
+    "escalate_when": [
+      "IAM policies are correct and unchanged but authorization errors persist",
+      "Connections show healthy in new UI but metrics are still not ingested",
+      "All 7+ accounts affected simultaneously with no IAM changes on the customer side"
+    ]
+  },
+  {
+    "id": "feature_gap_gen3_limitation",
+    "product_area": "DEM",
+    "title": "Feature not yet available in gen3 or net-new tenant",
+    "triggers": ["gen3", "not yet available", "not available in", "classic apps", "net new", "maintenance window", "feature not available"],
+    "keywords": ["gen3", "classic", "maintenance window", "workflow", "workaround", "limitation", "fully gen3", "net new tenant"],
+    "failure_domains": [
+      "Feature exists in classic tenants but has not been ported to gen3 yet",
+      "Workaround exists via Workflows but introduces operational cost or complexity"
+    ],
+    "questions": [
+      "Has the customer been informed that this feature is not yet available in gen3 and what the current roadmap expectation is?",
+      "Is the Workflows-based workaround technically viable within the customer's contract and cost constraints?",
+      "Is there a timeline pressure (like a go-live or event) that requires an escalated response?"
+    ],
+    "evidence": [
+      "Confirmation of tenant type (gen3 vs classic) and the specific feature that is missing",
+      "Customer contract details to assess whether the Workflows workaround adds cost",
+      "Timeline and business impact if the feature or workaround is not in place before the deadline"
+    ],
+    "mitigations": [
+      "Confirm the limitation with the product team and provide the customer with the expected availability timeline",
+      "Walk through the Workflows-based workaround in detail and assess whether the cost impact is acceptable",
+      "If business impact is significant, escalate to CSM and product team to flag as a high-priority gap"
+    ],
+    "escalate_when": [
+      "Customer has a hard deadline (event, go-live) that cannot be met with the current workaround",
+      "Workaround introduces costs the customer's contract does not accommodate",
+      "Multiple customers on gen3 are blocked by the same feature gap"
+    ]
   }
 ]
