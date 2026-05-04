@@ -27,7 +27,16 @@ from .config import (
     configured_allowed_hosts,
 )
 from .diagnosis import classify_concern, diagnose_problem, matched_product_profiles
+from .feedback import get_feedback_store, inject_learned_context
 from .models import ConnectorDocument, CorpusEntry, Diagnosis, SearchResult
+from .session import (
+    Session,
+    append_turn,
+    build_session_context,
+    create_session,
+    load_session,
+    session_footer,
+)
 
 
 class TextExtractor(HTMLParser):
@@ -1305,7 +1314,12 @@ def build_customer_response_draft(problem_statement: str, diagnosis: Diagnosis, 
     return "\n".join(body)
 
 
-def build_triage_text(problem_statement: str, sources: list[str], max_results: int) -> str:
+def build_triage_text(problem_statement: str, sources: list[str], max_results: int, session_id: str = "") -> str:
+    session = load_session(session_id) if session_id else create_session()
+    if session is None:
+        session = create_session()
+
+    learned = inject_learned_context(problem_statement)
     diagnosis = diagnose_problem(problem_statement)
     concern_types = diagnosis.concern_types
     component = diagnosis.product_area
@@ -1327,51 +1341,60 @@ def build_triage_text(problem_statement: str, sources: list[str], max_results: i
     escalation_items = [f"- {item}" for item in escalation_criteria_from_diagnosis(diagnosis)]
     customer_draft = build_customer_response_draft(problem_statement, diagnosis, results)
 
-    return "\n".join(
-        [
-            f"Problem statement: {problem_statement}",
-            f"Concern types: {', '.join(concern_types)}",
-            f"Likely component: {component}",
-            f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
-            f"Likely subdomain: {diagnosis.subdomain} ({diagnosis.subdomain_confidence:.2f})",
-            f"Estimated severity: {severity}",
-            f"Matched playbooks: {', '.join(playbook.title for playbook in playbooks) if playbooks else 'None'}",
-            f"Source insight: {source_insight}",
-            "",
-            "Top failure modes:",
-            *(failure_mode_items or ["- No strong failure modes inferred yet."]),
-            "",
-            "Working hypotheses:",
-            *[f"- {hypothesis}" for hypothesis in hypotheses],
-            "",
-            "Immediate questions:",
-            *[f"- {question}" for question in questions],
-            "",
-            "Evidence to collect:",
-            *[f"- {item}" for item in evidence],
-            "",
-            "Risk flags:",
-            *risk_items,
-            "",
-            "Recommended next actions:",
-            *[f"- {action}" for action in actions],
-            "",
-            "Suggested mitigations:",
-            *(mitigation_items or ["- No playbook-specific mitigation suggestions yet."]),
-            "",
-            "Escalate to engineering when:",
-            *(escalation_items or ["- Escalate after configuration and environment causes are ruled out."]),
-            "",
-            "Short customer-facing response draft:",
-            customer_draft,
-            "",
-            "Top references:",
-            format_results(results),
-        ]
-    )
+    parts: list[str] = []
+    if learned:
+        parts += [learned, ""]
+    parts += [
+        f"Problem statement: {problem_statement}",
+        f"Concern types: {', '.join(concern_types)}",
+        f"Likely component: {component}",
+        f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
+        f"Likely subdomain: {diagnosis.subdomain} ({diagnosis.subdomain_confidence:.2f})",
+        f"Estimated severity: {severity}",
+        f"Matched playbooks: {', '.join(playbook.title for playbook in playbooks) if playbooks else 'None'}",
+        f"Source insight: {source_insight}",
+        "",
+        "Top failure modes:",
+        *(failure_mode_items or ["- No strong failure modes inferred yet."]),
+        "",
+        "Working hypotheses:",
+        *[f"- {hypothesis}" for hypothesis in hypotheses],
+        "",
+        "Immediate questions:",
+        *[f"- {question}" for question in questions],
+        "",
+        "Evidence to collect:",
+        *[f"- {item}" for item in evidence],
+        "",
+        "Risk flags:",
+        *risk_items,
+        "",
+        "Recommended next actions:",
+        *[f"- {action}" for action in actions],
+        "",
+        "Suggested mitigations:",
+        *(mitigation_items or ["- No playbook-specific mitigation suggestions yet."]),
+        "",
+        "Escalate to engineering when:",
+        *(escalation_items or ["- Escalate after configuration and environment causes are ruled out."]),
+        "",
+        "Short customer-facing response draft:",
+        customer_draft,
+        "",
+        "Top references:",
+        format_results(results),
+    ]
+    output = "\n".join(parts)
+    append_turn(session, "triage_case", problem_statement, output, component, severity)
+    return output + session_footer(session)
 
 
-def build_bug_escalation_text(problem_statement: str, sources: list[str], max_results: int) -> str:
+def build_bug_escalation_text(problem_statement: str, sources: list[str], max_results: int, session_id: str = "") -> str:
+    session = load_session(session_id) if session_id else create_session()
+    if session is None:
+        session = create_session()
+
+    learned = inject_learned_context(problem_statement)
     diagnosis = diagnose_problem(problem_statement)
     concern_types = diagnosis.concern_types
     component = diagnosis.product_area
@@ -1380,39 +1403,61 @@ def build_bug_escalation_text(problem_statement: str, sources: list[str], max_re
     hypotheses = generate_hypotheses_from_diagnosis(diagnosis)
     escalation_items = escalation_criteria_from_diagnosis(diagnosis)
 
-    return "\n".join(
-        [
-            "Engineering escalation draft",
-            f"Component: {component}",
-            f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
-            f"Likely subdomain: {diagnosis.subdomain} ({diagnosis.subdomain_confidence:.2f})",
-            f"Concern types: {', '.join(concern_types)}",
-            f"Top failure modes: {', '.join(mode.title for mode in diagnosis.failure_modes) if diagnosis.failure_modes else 'None'}",
-            "",
-            f"Problem summary: {problem_statement}",
-            "Expected behavior: Dynatrace should continue to behave according to documented product behavior for this workflow.",
-            "Actual behavior: Customer reports unexpected or failing behavior that needs validation against docs and potentially DE review.",
-            "Customer impact: Describe current scope, severity, production risk, and any workaround status.",
-            "Current hypotheses:",
-            *[f"- {hypothesis}" for hypothesis in hypotheses],
-            "Evidence checklist:",
-            *[f"- {item}" for item in evidence],
-            "Escalation threshold that was considered:",
-            *([f"- {item}" for item in escalation_items] or ["- Config and environment causes have been sufficiently ruled out."]),
-            "",
-            "Relevant references to compare against:",
-            format_results(results),
-        ]
-    )
+    parts: list[str] = []
+    if learned:
+        parts += [learned, ""]
+    parts += [
+        "Engineering escalation draft",
+        f"Component: {component}",
+        f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
+        f"Likely subdomain: {diagnosis.subdomain} ({diagnosis.subdomain_confidence:.2f})",
+        f"Concern types: {', '.join(concern_types)}",
+        f"Top failure modes: {', '.join(mode.title for mode in diagnosis.failure_modes) if diagnosis.failure_modes else 'None'}",
+        "",
+        f"Problem summary: {problem_statement}",
+        "Expected behavior: Dynatrace should continue to behave according to documented product behavior for this workflow.",
+        "Actual behavior: Customer reports unexpected or failing behavior that needs validation against docs and potentially DE review.",
+        "Customer impact: Describe current scope, severity, production risk, and any workaround status.",
+        "Current hypotheses:",
+        *[f"- {hypothesis}" for hypothesis in hypotheses],
+        "Evidence checklist:",
+        *[f"- {item}" for item in evidence],
+        "Escalation threshold that was considered:",
+        *([f"- {item}" for item in escalation_items] or ["- Config and environment causes have been sufficiently ruled out."]),
+        "",
+        "Relevant references to compare against:",
+        format_results(results),
+    ]
+    output = "\n".join(parts)
+    append_turn(session, "build_bug_escalation", problem_statement, output, component, diagnosis.severity)
+    return output + session_footer(session)
 
 
-def build_customer_response_text(problem_statement: str, sources: list[str], max_results: int) -> str:
+def build_customer_response_text(problem_statement: str, sources: list[str], max_results: int, session_id: str = "") -> str:
+    session = load_session(session_id) if session_id else create_session()
+    if session is None:
+        session = create_session()
+
+    learned = inject_learned_context(problem_statement)
     diagnosis = diagnose_problem(problem_statement)
     results = search_knowledge(problem_statement, sources, max_results, diagnosis)
-    return build_customer_response_draft(problem_statement, diagnosis, results)
+    draft = build_customer_response_draft(problem_statement, diagnosis, results)
+
+    parts: list[str] = []
+    if learned:
+        parts += [learned, ""]
+    parts.append(draft)
+    output = "\n".join(parts)
+    append_turn(session, "build_customer_response", problem_statement, output, diagnosis.product_area, diagnosis.severity)
+    return output + session_footer(session)
 
 
-def build_investigation_plan_text(problem_statement: str, sources: list[str], max_results: int) -> str:
+def build_investigation_plan_text(problem_statement: str, sources: list[str], max_results: int, session_id: str = "") -> str:
+    session = load_session(session_id) if session_id else create_session()
+    if session is None:
+        session = create_session()
+
+    learned = inject_learned_context(problem_statement)
     diagnosis = diagnose_problem(problem_statement)
     concern_types = diagnosis.concern_types
     component = diagnosis.product_area
@@ -1435,38 +1480,89 @@ def build_investigation_plan_text(problem_statement: str, sources: list[str], ma
     if "customer_environment_impact" in concern_types:
         steps.append("Establish mitigation or workaround options and communicate blast radius clearly.")
 
-    return "\n".join(
-        [
-            "Investigation plan",
-            f"Likely component: {component}",
-            f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
-            f"Likely subdomain: {diagnosis.subdomain} ({diagnosis.subdomain_confidence:.2f})",
-            f"Concern types: {', '.join(concern_types)}",
-            f"Matched playbooks: {', '.join(playbook.title for playbook in playbooks) if playbooks else 'None'}",
-            f"Top failure modes: {', '.join(mode.title for mode in diagnosis.failure_modes) if diagnosis.failure_modes else 'None'}",
-            "",
-            "Ordered plan:",
-            *[f"{index}. {step}" for index, step in enumerate(steps, start=1)],
-            "",
-            "Leading hypotheses:",
-            *[f"- {hypothesis}" for hypothesis in hypotheses],
-            "",
-            "Evidence checklist:",
-            *[f"- {item}" for item in evidence],
-            "",
-            "Reference pack:",
-            format_results(results),
-            "",
-            "Decision guidance:",
-            *[f"- {action}" for action in actions],
-            "",
-            "Targeted mitigations:",
-            *([f"- {item}" for item in mitigations] or ["- No playbook-specific mitigations identified yet."]),
-            "",
-            "Escalation guide:",
-            *([f"- {item}" for item in escalation_items] or ["- Escalate after reproducing the issue and ruling out configuration causes."]),
-        ]
-    )
+    parts: list[str] = []
+    if learned:
+        parts += [learned, ""]
+    parts += [
+        "Investigation plan",
+        f"Likely component: {component}",
+        f"Diagnosis confidence: {diagnosis.product_confidence:.2f}",
+        f"Likely subdomain: {diagnosis.subdomain} ({diagnosis.subdomain_confidence:.2f})",
+        f"Concern types: {', '.join(concern_types)}",
+        f"Matched playbooks: {', '.join(playbook.title for playbook in playbooks) if playbooks else 'None'}",
+        f"Top failure modes: {', '.join(mode.title for mode in diagnosis.failure_modes) if diagnosis.failure_modes else 'None'}",
+        "",
+        "Ordered plan:",
+        *[f"{index}. {step}" for index, step in enumerate(steps, start=1)],
+        "",
+        "Leading hypotheses:",
+        *[f"- {hypothesis}" for hypothesis in hypotheses],
+        "",
+        "Evidence checklist:",
+        *[f"- {item}" for item in evidence],
+        "",
+        "Reference pack:",
+        format_results(results),
+        "",
+        "Decision guidance:",
+        *[f"- {action}" for action in actions],
+        "",
+        "Targeted mitigations:",
+        *([f"- {item}" for item in mitigations] or ["- No playbook-specific mitigations identified yet."]),
+        "",
+        "Escalation guide:",
+        *([f"- {item}" for item in escalation_items] or ["- Escalate after reproducing the issue and ruling out configuration causes."]),
+    ]
+    output = "\n".join(parts)
+    append_turn(session, "build_investigation_plan", problem_statement, output, component, diagnosis.severity)
+    return output + session_footer(session)
+
+
+def build_follow_up_text(session_id: str, message: str, sources: list[str], max_results: int) -> str:
+    session = load_session(session_id)
+    if session is None:
+        return (
+            f"Session '{session_id}' not found. "
+            "Please start a new conversation with triage_case, build_investigation_plan, "
+            "build_customer_response, or build_bug_escalation."
+        )
+
+    prior_context = build_session_context(session)
+    first_problem = session.turns[0].input_text if session.turns else message
+    merged_context = f"{first_problem}\n\n{prior_context}\n\nNew message: {message}"
+
+    learned = inject_learned_context(message)
+    diagnosis = diagnose_problem(merged_context)
+    results = search_knowledge(message, sources, max_results, diagnosis)
+    questions = targeted_customer_requests(message, diagnosis)
+    hypotheses = generate_hypotheses_from_diagnosis(diagnosis)
+    mitigations = playbook_mitigations_from_diagnosis(diagnosis)
+
+    parts: list[str] = []
+    if learned:
+        parts += [learned, ""]
+    parts += [
+        f"Follow-up response  (Turn {len(session.turns) + 1})",
+        "",
+        f"New message: {message}",
+        "",
+        f"Re-assessed product area : {diagnosis.product_area}  (confidence {diagnosis.product_confidence:.2f})",
+        f"Re-assessed subdomain    : {diagnosis.subdomain}  (confidence {diagnosis.subdomain_confidence:.2f})",
+        f"Refined severity         : {diagnosis.severity}",
+        "",
+        "Updated hypotheses based on new information:",
+        *[f"- {h}" for h in hypotheses[:4]],
+        "",
+        "Next questions to narrow the diagnosis:",
+        *[f"- {q}" for q in questions[:4]],
+    ]
+    if mitigations:
+        parts += ["", "Suggested mitigations:"] + [f"- {m}" for m in mitigations[:3]]
+    parts += ["", "Relevant references:", format_results(results)]
+
+    output = "\n".join(parts)
+    append_turn(session, "follow_up", message, output, diagnosis.product_area, diagnosis.severity)
+    return output + session_footer(session)
 
 
 def normalize_sources(value: Any) -> list[str]:
@@ -1671,6 +1767,10 @@ def list_tools() -> dict[str, Any]:
                             "type": "string",
                             "description": "Optional additional context such as prior replies, version numbers, or log snippets.",
                         },
+                        "sessionId": {
+                            "type": "string",
+                            "description": "Optional session ID to continue an existing conversation.",
+                        },
                         "sources": {
                             "type": "array",
                             "items": {
@@ -1803,6 +1903,89 @@ def list_tools() -> dict[str, Any]:
                     "required": ["problemStatement"],
                 },
             },
+            {
+                "name": "follow_up",
+                "description": "Continue an existing support conversation by sessionId. Provide new information, ask a follow-up question, or request an updated draft. The MCP re-assesses the case with the full prior context.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sessionId": {
+                            "type": "string",
+                            "description": "Session ID shown at the bottom of a previous triage_case, build_investigation_plan, build_customer_response, or build_bug_escalation response.",
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "Your follow-up message, new information from the customer, or question about the case.",
+                        },
+                        "sources": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": SOURCE_NAMES},
+                        },
+                        "maxResults": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 10,
+                        },
+                    },
+                    "required": ["sessionId", "message"],
+                },
+            },
+            {
+                "name": "submit_correction",
+                "description": "Tell the MCP that a previous answer was wrong and provide the correct information. The correction is stored and used to improve all future similar queries automatically.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "originalProblem": {
+                            "type": "string",
+                            "description": "The original problem statement or question that received the wrong answer.",
+                        },
+                        "whatWasWrong": {
+                            "type": "string",
+                            "description": "Brief description of what was incorrect in the previous answer.",
+                        },
+                        "correctedInfo": {
+                            "type": "string",
+                            "description": "The correct information or guidance that should be used for this type of problem.",
+                        },
+                        "productArea": {
+                            "type": "string",
+                            "description": "Optional Dynatrace product area this correction applies to.",
+                        },
+                    },
+                    "required": ["originalProblem", "correctedInfo"],
+                },
+            },
+            {
+                "name": "confirm_answer",
+                "description": "Tell the MCP that a previous answer was correct. Confirmations are stored and used to reinforce confidence for similar future queries.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "originalProblem": {
+                            "type": "string",
+                            "description": "The original problem statement or question that received the correct answer.",
+                        },
+                        "confirmedInfo": {
+                            "type": "string",
+                            "description": "Brief description of what was correct — the insight or guidance that worked.",
+                        },
+                        "productArea": {
+                            "type": "string",
+                            "description": "Optional Dynatrace product area this confirmation applies to.",
+                        },
+                    },
+                    "required": ["originalProblem", "confirmedInfo"],
+                },
+            },
+            {
+                "name": "list_feedback_stats",
+                "description": "Show how many corrections and confirmations have been stored and which are used most often.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
         ]
     }
 
@@ -1868,9 +2051,10 @@ def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         case_notes = str(arguments.get("caseNotes", "")).strip()
         if case_notes:
             problem_statement = f"{problem_statement}\n\nAdditional context: {case_notes}"
+        session_id = str(arguments.get("sessionId", "")).strip()
         sources = normalize_sources(arguments.get("sources"))
         max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
-        return tool_result(build_triage_text(problem_statement, sources, max_results))
+        return tool_result(build_triage_text(problem_statement, sources, max_results, session_id))
 
     if name == "build_bug_escalation":
         problem_statement = str(arguments.get("problemStatement", "")).strip()
@@ -1879,9 +2063,10 @@ def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         case_notes = str(arguments.get("caseNotes", "")).strip()
         if case_notes:
             problem_statement = f"{problem_statement}\n\nAdditional context: {case_notes}"
+        session_id = str(arguments.get("sessionId", "")).strip()
         sources = normalize_sources(arguments.get("sources"))
         max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
-        return tool_result(build_bug_escalation_text(problem_statement, sources, max_results))
+        return tool_result(build_bug_escalation_text(problem_statement, sources, max_results, session_id))
 
     if name == "build_customer_response":
         problem_statement = str(arguments.get("problemStatement", "")).strip()
@@ -1890,9 +2075,10 @@ def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         case_notes = str(arguments.get("caseNotes", "")).strip()
         if case_notes:
             problem_statement = f"{problem_statement}\n\nAdditional context: {case_notes}"
+        session_id = str(arguments.get("sessionId", "")).strip()
         sources = normalize_sources(arguments.get("sources"))
         max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
-        return tool_result(build_customer_response_text(problem_statement, sources, max_results))
+        return tool_result(build_customer_response_text(problem_statement, sources, max_results, session_id))
 
     if name == "prime_topic_cache":
         query = str(arguments.get("query", "")).strip()
@@ -1919,9 +2105,77 @@ def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         case_notes = str(arguments.get("caseNotes", "")).strip()
         if case_notes:
             problem_statement = f"{problem_statement}\n\nAdditional context: {case_notes}"
+        session_id = str(arguments.get("sessionId", "")).strip()
         sources = normalize_sources(arguments.get("sources"))
         max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
-        return tool_result(build_investigation_plan_text(problem_statement, sources, max_results))
+        return tool_result(build_investigation_plan_text(problem_statement, sources, max_results, session_id))
+
+    if name == "follow_up":
+        session_id = str(arguments.get("sessionId", "")).strip()
+        if not session_id:
+            raise ValueError("sessionId is required")
+        message = str(arguments.get("message", "")).strip()
+        if not message:
+            raise ValueError("message is required")
+        sources = normalize_sources(arguments.get("sources"))
+        max_results = max(1, min(int(arguments.get("maxResults", 5)), 10))
+        return tool_result(build_follow_up_text(session_id, message, sources, max_results))
+
+    if name == "submit_correction":
+        original_problem = str(arguments.get("originalProblem", "")).strip()
+        if not original_problem:
+            raise ValueError("originalProblem is required")
+        corrected_info = str(arguments.get("correctedInfo", "")).strip()
+        if not corrected_info:
+            raise ValueError("correctedInfo is required")
+        what_was_wrong = str(arguments.get("whatWasWrong", "")).strip()
+        product_area = str(arguments.get("productArea", "")).strip()
+        store = get_feedback_store()
+        entry = store.add_correction(original_problem, what_was_wrong, corrected_info, product_area)
+        return tool_result(
+            "\n".join([
+                f"Correction saved  (id: {entry.id})",
+                f"Product area : {entry.product_area or 'not specified'}",
+                f"What was wrong   : {entry.what_was_wrong or 'not specified'}",
+                f"Correct info     : {entry.corrected_info}",
+                "",
+                "This correction will be surfaced automatically on all future queries that match this pattern.",
+            ])
+        )
+
+    if name == "confirm_answer":
+        original_problem = str(arguments.get("originalProblem", "")).strip()
+        if not original_problem:
+            raise ValueError("originalProblem is required")
+        confirmed_info = str(arguments.get("confirmedInfo", "")).strip()
+        if not confirmed_info:
+            raise ValueError("confirmedInfo is required")
+        product_area = str(arguments.get("productArea", "")).strip()
+        store = get_feedback_store()
+        entry = store.add_confirmation(original_problem, confirmed_info, product_area)
+        return tool_result(
+            "\n".join([
+                f"Confirmation saved  (id: {entry.id})",
+                f"Product area : {entry.product_area or 'not specified'}",
+                f"Confirmed    : {entry.confirmed_info}",
+                "",
+                "This will reinforce the answer pattern for similar future queries.",
+            ])
+        )
+
+    if name == "list_feedback_stats":
+        stats = get_feedback_store().stats()
+        lines = [
+            f"Total corrections stored  : {stats['total_corrections']}",
+            f"Total confirmations stored : {stats['total_confirmations']}",
+            "",
+            "Most-used corrections:",
+        ]
+        for item in stats["top_corrections_by_use"]:
+            lines.append(f"  [{item['product_area'] or 'general'}] used {item['use_count']}x — {item['snippet']}")
+        if not stats["top_corrections_by_use"]:
+            lines.append("  No corrections stored yet.")
+        return tool_result("\n".join(lines))
 
     raise ValueError(f"Unknown tool: {name}")
 
