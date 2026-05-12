@@ -1,8 +1,12 @@
 from __future__ import annotations
 import html
 import json
+import os
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 from dynatrace_mcp.app import (
     build_bug_escalation_text,
@@ -17,14 +21,82 @@ HOST = "127.0.0.1"
 PORT = 8765
 
 OUTPUT_MODES = {
-    "triage": ("Triage", build_triage_text),
-    "investigation": ("Investigation Plan", build_investigation_plan_text),
-    "customer_response": ("Customer Response", build_customer_response_text),
-    "bug_escalation": ("Bug Escalation", build_bug_escalation_text),
+    "triage":            ("Triage",             build_triage_text),
+    "investigation":     ("Investigation Plan", build_investigation_plan_text),
+    "customer_response": ("Customer Response",  build_customer_response_text),
+    "bug_escalation":    ("Bug Escalation",     build_bug_escalation_text),
 }
 
-ALL_MODES = list(OUTPUT_MODES.keys()) + ["follow_up"]
 
+# ── Slack ────────────────────────────────────────────────────────────────────
+
+def _send_to_slack(result_text: str) -> str:
+    webhook = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
+    if not webhook:
+        return "SLACK_WEBHOOK_URL is not configured. Set it as an environment variable to enable Slack."
+
+    session_match = re.search(r"Session ID\s*:\s*(\S+)", result_text)
+    session_id    = session_match.group(1) if session_match else "—"
+
+    area_match = re.search(r"(?:Likely component|Component|Affected area)\s*:\s*(.+)", result_text)
+    area       = area_match.group(1).strip() if area_match else "—"
+
+    sev_match = re.search(r"(?:Estimated severity|Refined severity)\s*:\s*(\S+)", result_text)
+    severity  = sev_match.group(1).strip() if sev_match else "—"
+
+    pb_match = re.search(r"Matched playbook[s]?\s*:\s*(.+)", result_text)
+    playbook = pb_match.group(1).strip() if pb_match else "None matched"
+
+    sev_emoji = {"high": "🔴", "medium": "🟡", "normal": "🟢"}.get(severity.lower(), "⚪")
+
+    lines     = result_text.splitlines()
+    questions = [l.lstrip("- ") for l in lines if l.strip().startswith("- ") and "?" in l][:3]
+    q_block   = "\n".join(f"• {q}" for q in questions) or "See full result for details."
+
+    message = {
+        "text": f"{sev_emoji} *Dynatrace Support MCP — Case Triaged*",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"{sev_emoji} Dynatrace Support MCP — Case Triaged"},
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Product Area:*\n{area}"},
+                    {"type": "mrkdwn", "text": f"*Severity:*\n{severity.upper()}"},
+                    {"type": "mrkdwn", "text": f"*Playbook:*\n{playbook}"},
+                    {"type": "mrkdwn", "text": f"*Session ID:*\n`{session_id}`"},
+                ],
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Key questions to resolve:*\n{q_block}"},
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"Use Session ID `{session_id}` with the Follow Up tool to continue this investigation."},
+                ],
+            },
+        ],
+    }
+
+    try:
+        req = Request(
+            webhook,
+            data=json.dumps(message).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=10) as resp:
+            resp.read()
+        return "ok"
+    except (URLError, OSError) as exc:
+        return f"Slack delivery failed: {exc}"
+
+
+# ── HTML components ──────────────────────────────────────────────────────────
 
 def _mode_pills(mode: str) -> str:
     pills = []
@@ -73,13 +145,25 @@ def _feedback_panel(original_problem: str) -> str:
 
 
 def _result_panel(output: str, error: str, original_problem: str = "") -> str:
+    slack_enabled = bool(os.environ.get("SLACK_WEBHOOK_URL", "").strip())
+
     if output:
+        slack_btn = ""
+        if slack_enabled:
+            esc_out   = html.escape(output)
+            slack_btn = (
+                f'<form method="post" action="/slack" style="padding:0 18px 14px">'
+                f'<input type="hidden" name="result_text" value="{esc_out}">'
+                f'<button type="submit" class="btn btn-slack">&#128279; Send to Slack</button>'
+                f'</form>'
+            )
         return (
             f'<div class="card result-card">'
             f'<p class="card-label">Result</p>'
             f'<pre>{html.escape(output)}</pre>'
+            f'{slack_btn}'
             f'</div>'
-            + (_feedback_panel(original_problem))
+            + _feedback_panel(original_problem)
         )
     if error:
         return (
@@ -98,185 +182,105 @@ def _result_panel(output: str, error: str, original_problem: str = "") -> str:
 
 CSS = """
 :root {
-  --bg:      #f5f0ea;
-  --card:    #ffffff;
-  --border:  #e2d9ce;
-  --text:    #1c1712;
-  --muted:   #70675e;
-  --accent:  #0f766e;
-  --accent2: #e6f7f5;
-  --danger:  #be123c;
-  --radius:  14px;
-  --shadow:  0 4px 24px rgba(0,0,0,0.07);
+  --bg:     #f5f0ea;
+  --card:   #ffffff;
+  --border: #e2d9ce;
+  --text:   #1c1712;
+  --muted:  #70675e;
+  --accent: #0f766e;
+  --accent2:#e6f7f5;
+  --danger: #be123c;
+  --slack:  #4a154b;
+  --radius: 14px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.07);
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-  background: var(--bg);
-  color: var(--text);
-  min-height: 100vh;
+  font-size: 14px; line-height: 1.5;
+  background: var(--bg); color: var(--text); min-height: 100vh;
 }
 .page { max-width: 1280px; margin: 0 auto; padding: 24px 20px 48px; }
-
-/* Header */
 .header { margin-bottom: 24px; }
-.header h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; color: var(--text); }
+.header h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
 .header p  { margin-top: 4px; color: var(--muted); font-size: 13px; }
-
-/* Layout */
 .layout {
-  display: grid;
-  grid-template-columns: 380px 1fr;
-  gap: 20px;
-  align-items: start;
+  display: grid; grid-template-columns: 380px 1fr;
+  gap: 20px; align-items: start;
 }
-
-/* Cards */
 .card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  overflow: hidden;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
 }
 .card-label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-  padding: 16px 18px 0;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted); padding: 16px 18px 0;
 }
 .card-body { padding: 14px 18px 18px; }
-
-/* Mode pills */
-.pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 14px 18px 0;
-}
+.pills { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 18px 0; }
 .pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border: 1.5px solid var(--border);
-  border-radius: 999px;
-  background: #faf8f5;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--muted);
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border: 1.5px solid var(--border);
+  border-radius: 999px; background: #faf8f5; cursor: pointer;
+  font-size: 13px; font-weight: 500; color: var(--muted);
   transition: border-color 0.15s, color 0.15s, background 0.15s;
-  white-space: nowrap;
-  user-select: none;
+  white-space: nowrap; user-select: none;
 }
 .pill input[type="radio"] { display: none; }
-.pill:has(input:checked) {
-  border-color: var(--accent);
-  background: var(--accent2);
-  color: var(--accent);
-}
+.pill:has(input:checked) { border-color: var(--accent); background: var(--accent2); color: var(--accent); }
 .pill-follow { border-color: #d1fae5; color: #065f46; }
 .pill-follow:has(input:checked) { border-color: #059669; background: #d1fae5; color: #065f46; }
-
-/* Form elements */
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 6px; }
 textarea, input[type="text"], input[type="number"] {
-  width: 100%;
-  border: 1.5px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 12px;
-  font: inherit;
-  font-size: 13px;
-  background: #faf8f5;
-  color: var(--text);
-  outline: none;
-  transition: border-color 0.15s;
+  width: 100%; border: 1.5px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; font: inherit; font-size: 13px;
+  background: #faf8f5; color: var(--text); outline: none; transition: border-color 0.15s;
 }
 textarea:focus, input:focus { border-color: var(--accent); }
 textarea { resize: vertical; min-height: 160px; }
-
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
-
 .sources { display: flex; gap: 14px; margin-top: 6px; }
 .sources label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
-
-/* Buttons */
 .btn {
-  display: inline-block;
-  border: none;
-  border-radius: 999px;
-  padding: 10px 22px;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: opacity 0.15s;
+  display: inline-block; border: none; border-radius: 999px;
+  padding: 10px 22px; font: inherit; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: opacity 0.15s;
 }
-.btn:hover { opacity: 0.88; }
-.btn-primary { background: var(--accent); color: #fff; }
-.btn-danger  { background: var(--danger); color: #fff; width: 100%; margin-top: 10px; }
-.btn-confirm { background: var(--accent); color: #fff; width: 100%; margin-top: 10px; }
-
-/* Hidden input sections */
+.btn:hover    { opacity: 0.88; }
+.btn-primary  { background: var(--accent); color: #fff; }
+.btn-danger   { background: var(--danger); color: #fff; width: 100%; margin-top: 10px; }
+.btn-confirm  { background: var(--accent); color: #fff; width: 100%; margin-top: 10px; }
+.btn-slack    { background: var(--slack);  color: #fff; font-size: 12px; padding: 8px 18px; }
 #case-input, #followup-input { margin-top: 14px; }
-
-/* Result panel */
 .result-card { min-height: 520px; }
 .result-card pre {
   padding: 16px 18px 20px;
   font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
-  font-size: 12.5px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: #fafafa;
-  color: var(--text);
+  font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+  background: #fafafa; color: var(--text);
 }
 .empty-card { display: flex; flex-direction: column; }
-.empty-hint {
-  padding: 40px 18px;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: center;
-}
+.empty-hint { padding: 40px 18px; color: var(--muted); font-size: 13px; text-align: center; }
 .error-card pre { color: var(--danger); }
-
-/* Feedback */
 .feedback-wrap {
-  margin-top: 16px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 16px 18px 18px;
+  margin-top: 16px; background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px 18px 18px;
 }
 .feedback-title {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin-bottom: 14px;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 14px;
 }
 .feedback-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .fb-form textarea { min-height: 72px; }
 .fb-form input[type="text"] { margin-top: 8px; }
 .fb-label { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 8px; }
-
-/* Session hint */
 .session-hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
-
 @media (max-width: 860px) {
-  .layout         { grid-template-columns: 1fr; }
-  .feedback-grid  { grid-template-columns: 1fr; }
-  .row            { grid-template-columns: 1fr; }
+  .layout        { grid-template-columns: 1fr; }
+  .feedback-grid { grid-template-columns: 1fr; }
+  .row           { grid-template-columns: 1fr; }
 }
 """
 
@@ -292,7 +296,7 @@ def render_page(
     output: str = "",
     error: str = "",
 ) -> str:
-    sel = sources or ["docs", "community"]
+    sel           = sources or ["docs", "community"]
     docs_chk      = "checked" if "docs"      in sel else ""
     community_chk = "checked" if "community" in sel else ""
     is_follow_up  = (mode == "follow_up")
@@ -307,30 +311,22 @@ def render_page(
 </head>
 <body>
 <div class="page">
-
   <div class="header">
     <h1>TraceSage 2.0</h1>
-    <p>Paste a support case, pick a mode, and run. Copy the Session ID to continue the conversation with Follow Up.</p>
+    <p>Paste a support case, pick a mode, and run. Copy the Session ID to continue with Follow Up.</p>
   </div>
 
   <div class="layout">
-
-    <!-- Left: Input card -->
     <form class="card" method="post">
-
       <p class="card-label">Mode</p>
-      <div class="pills">
-        {_mode_pills(mode)}
-      </div>
+      <div class="pills">{_mode_pills(mode)}</div>
 
-      <!-- Normal case input -->
       <div id="case-input" class="card-body" {'style="display:none"' if is_follow_up else ''}>
         <div class="field">
           <label for="problem_statement">Customer issue</label>
           <textarea id="problem_statement" name="problem_statement"
             placeholder="Paste a real support case here...">{html.escape(problem_statement)}</textarea>
         </div>
-
         <div class="row">
           <div class="field">
             <label>Sources</label>
@@ -344,17 +340,14 @@ def render_page(
             <input id="max_results" type="number" name="max_results" min="1" max="10" value="{max_results}">
           </div>
         </div>
-
         <button type="submit" class="btn btn-primary">Run Analysis</button>
       </div>
 
-      <!-- Follow Up input -->
       <div id="followup-input" class="card-body" {'style="display:none"' if not is_follow_up else ''}>
         <div class="field">
           <label for="session_id">Session ID</label>
           <input type="text" id="session_id" name="session_id"
-            placeholder="e.g. 5998bce0-ae8"
-            value="{html.escape(session_id)}">
+            placeholder="e.g. 5998bce0-ae8" value="{html.escape(session_id)}">
         </div>
         <div class="field">
           <label for="follow_up_message">Your message</label>
@@ -362,7 +355,6 @@ def render_page(
             placeholder="Add new info, ask a question, or share what the customer just said..."
             style="min-height:120px">{html.escape(follow_up_message)}</textarea>
         </div>
-
         <div class="row">
           <div class="field">
             <label>Sources</label>
@@ -376,26 +368,19 @@ def render_page(
             <input id="max_results2" type="number" name="max_results" min="1" max="10" value="{max_results}">
           </div>
         </div>
-
         <p class="session-hint">The Session ID appears at the bottom of every result.</p>
         <button type="submit" class="btn btn-primary" style="margin-top:10px">Send Follow Up</button>
       </div>
-
     </form>
 
-    <!-- Right: Result -->
-    <div>
-      {_result_panel(output, error, problem_statement)}
-    </div>
-
+    <div>{_result_panel(output, error, problem_statement)}</div>
   </div>
 </div>
-
 <script>
   function toggleMode() {{
     const mode = document.querySelector('input[name="mode"]:checked').value;
     const fu = mode === 'follow_up';
-    document.getElementById('case-input').style.display    = fu ? 'none' : '';
+    document.getElementById('case-input').style.display     = fu ? 'none' : '';
     document.getElementById('followup-input').style.display = fu ? ''     : 'none';
   }}
 </script>
@@ -403,7 +388,10 @@ def render_page(
 </html>"""
 
 
+# ── HTTP handler ─────────────────────────────────────────────────────────────
+
 class MCPUIHandler(BaseHTTPRequestHandler):
+
     def do_GET(self) -> None:
         self._send_html(render_page())
 
@@ -411,9 +399,15 @@ class MCPUIHandler(BaseHTTPRequestHandler):
         length  = int(self.headers.get("Content-Length", "0"))
         payload = parse_qs(self.rfile.read(length).decode("utf-8"))
 
-        # Feedback submission
+        if self.path == "/slack":
+            result_text = payload.get("result_text", [""])[0]
+            status      = _send_to_slack(result_text)
+            msg = "Sent to Slack successfully." if status == "ok" else f"Slack error: {status}"
+            self._send_html(render_page(output=msg))
+            return
+
         if self.path == "/feedback":
-            fb_type = payload.get("fb_type", [""])[0]
+            fb_type = payload.get("fb_type",    [""])[0]
             problem = payload.get("fb_problem", [""])[0].strip()
             area    = payload.get("fb_area",    [""])[0].strip()
             store   = get_feedback_store()
@@ -437,7 +431,6 @@ class MCPUIHandler(BaseHTTPRequestHandler):
             self._send_html(render_page(output=msg))
             return
 
-        # Main form
         mode    = payload.get("mode",    ["triage"])[0]
         sources = payload.get("sources", ["docs", "community"]) or ["docs", "community"]
         try:
@@ -445,7 +438,6 @@ class MCPUIHandler(BaseHTTPRequestHandler):
         except ValueError:
             max_results = 6
 
-        # Follow Up mode
         if mode == "follow_up":
             session_id = payload.get("session_id",        [""])[0].strip()
             message    = payload.get("follow_up_message", [""])[0].strip()
@@ -457,20 +449,16 @@ class MCPUIHandler(BaseHTTPRequestHandler):
                 ))
                 return
             try:
-                output = build_follow_up_text(session_id, message, sources, max_results)
+                output, err = build_follow_up_text(session_id, message, sources, max_results), ""
             except Exception as exc:
-                output = None
-                err = str(exc)
-            else:
-                err = ""
+                output, err = "", str(exc)
             self._send_html(render_page(
                 mode=mode, sources=sources, max_results=max_results,
                 session_id=session_id, follow_up_message=message,
-                output=output or "", error=err,
+                output=output, error=err,
             ))
             return
 
-        # Normal modes
         problem_statement = payload.get("problem_statement", [""])[0].strip()
         if mode not in OUTPUT_MODES:
             mode = "triage"
@@ -484,11 +472,9 @@ class MCPUIHandler(BaseHTTPRequestHandler):
 
         try:
             _, builder = OUTPUT_MODES[mode]
-            output = builder(problem_statement, sources, max_results)
-            err    = ""
+            output, err = builder(problem_statement, sources, max_results), ""
         except Exception as exc:
-            output = ""
-            err    = str(exc)
+            output, err = "", str(exc)
 
         self._send_html(render_page(
             problem_statement=problem_statement, sources=sources,

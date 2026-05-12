@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "dynatrace-support": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["server.py"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "SLACK_WEBHOOK_URL": ""
+      }
+    }
+  }
+}

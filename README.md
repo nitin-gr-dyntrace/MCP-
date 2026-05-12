@@ -1,356 +1,213 @@
-# Dynatrace Support MCP
+# TraceSage 2.0 — Dynatrace Support MCP Server
 
-This project is a Python Model Context Protocol (MCP) server for Dynatrace support workflows.
+A Model Context Protocol (MCP) server that gives Claude and GitHub Copilot structured Dynatrace domain intelligence — live docs, playbooks, failure mode libraries, engineer-verified corrections, and session memory — so every support case gets a specific, actionable response instead of a generic one.
 
-It helps a support engineer:
+---
 
-- search `docs.dynatrace.com`
-- search `community.dynatrace.com`
-- read allowed Dynatrace pages
-- classify a customer concern into support-relevant buckets
-- triage cases with support-oriented next steps
-- draft engineering escalations and customer responses
-- cache topic-specific knowledge locally for faster follow-up searches
+## What it does
 
-It is also structured for future enterprise connectors such as Jira, Slack, and Stack Overflow.
-It now includes editable product-area support playbooks in `playbooks.json`.
-It also includes a lightweight evaluation harness in `eval.py`.
+| Mode | Output |
+|---|---|
+| **Triage** | Product area classification, matched playbooks, failure modes, questions, evidence checklist, customer draft |
+| **Investigation Plan** | Ordered investigation steps, hypotheses, reference pack |
+| **Customer Response** | Ready-to-send customer-facing reply |
+| **Bug Escalation** | DE-ready escalation with component, expected vs actual, evidence |
+| **Follow Up** | Continues a prior session with full context from previous turns |
 
-## Project Layout
+**Self-learning** — when an engineer submits a correction, it is stored and automatically surfaced the next time a similar case comes in.
 
-The entry script [server.py](/Users/nitin/Documents/Playground/server.py) is intentionally small.
+**Slack** — results can be posted directly to a Slack channel with one click.
 
-Core modules now live under [dynatrace_mcp](/Users/nitin/Documents/Playground/dynatrace_mcp):
+---
 
-- [app.py](/Users/nitin/Documents/Playground/dynatrace_mcp/app.py) for MCP handlers, retrieval, and CLI/demo flow
-- [diagnosis.py](/Users/nitin/Documents/Playground/dynatrace_mcp/diagnosis.py) for product-area and playbook diagnosis
-- [failure_modes.py](/Users/nitin/Documents/Playground/dynatrace_mcp/failure_modes.py) for generic failure-mode reasoning and evidence mapping
-- [config.py](/Users/nitin/Documents/Playground/dynatrace_mcp/config.py) for constants and product profiles
-- [models.py](/Users/nitin/Documents/Playground/dynatrace_mcp/models.py) for shared data models
-- [playbooks.py](/Users/nitin/Documents/Playground/dynatrace_mcp/playbooks.py) for playbook loading
+## Requirements
 
-## Included Tools
+- Python 3.11+
+- No external pip packages — uses stdlib only
 
-1. `search_dynatrace_knowledge`
-   Searches Dynatrace documentation and community content using Dynatrace sitemap discovery, local cache, and hybrid support-oriented ranking.
+---
 
-2. `read_dynatrace_page`
-   Fetches an allowed Dynatrace page and extracts readable content.
-
-3. `analyze_customer_concern`
-   Classifies the issue and suggests a support path for:
-   product not working, possible bug, and customer environment impact.
-
-4. `triage_case`
-   Produces a support-style triage summary with likely component, severity, hypotheses, evidence needs, risk flags, actions, and references.
-
-5. `build_bug_escalation`
-   Creates an engineering-ready escalation draft.
-
-6. `build_customer_response`
-   Drafts a customer-facing support response.
-
-7. `prime_topic_cache`
-   Preloads Dynatrace pages for a topic into a local cache.
-
-8. `build_investigation_plan`
-   Produces an ordered investigation plan for a case.
-
-9. `search_support_sources`
-   Searches across configured connectors.
-
-10. `list_connectors`
-   Shows which connectors are live now and which are scaffolded for later integration.
-
-## Playbooks
-
-Support playbooks live in [playbooks.json](/Users/nitin/Documents/Playground/playbooks.json).
-
-They inject product-specific:
-
-- failure domains
-- investigative questions
-- evidence checklists
-- mitigations
-- escalation criteria
-
-Current playbooks cover:
-
-- OneAgent
-- ActiveGate
-- Log Monitoring
-- Extensions
-- DEM
-- Kubernetes Monitoring
-- API / Authentication
-- Metrics Ingestion
-- Davis / Alerting
-
-To create or extend your own playbook:
-
-1. Copy an existing object in `playbooks.json`
-2. Set the `product_area`, `triggers`, and `keywords`
-3. Fill in `failure_domains`, `questions`, `evidence`, `mitigations`, and `escalate_when`
-4. Re-run the `--demo` commands to see the updated behavior
-
-## Evaluation
-
-Evaluation cases live in [eval_cases.json](/Users/nitin/Documents/Playground/eval_cases.json).
-
-Run the diagnosis/playbook evaluation with:
+## Installation
 
 ```bash
-python3 eval.py
+git clone https://github.com/nitin-gr-dyntrace/MCP-.git
+cd MCP-
 ```
 
-This gives you a baseline for:
+No `pip install` needed.
 
-- product-area accuracy
-- concern-type coverage
-- playbook-hit rate
+---
 
-## Connector Architecture
-
-The MCP is now organized so retrieval can grow source by source.
-
-Live now:
-
-- `docs`
-- `community`
-
-Scaffolded for later enterprise rollout:
-
-- `jira`
-- `slack`
-- `stackoverflow`
-
-The scaffold matters because later you can add APIs and credentials without redesigning the MCP tools.
-
-Expected future environment variables:
-
-- Jira: `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`
-- Slack: `SLACK_BOT_TOKEN`, `SLACK_ALLOWED_CHANNELS`
-- Stack Overflow: `STACKEXCHANGE_API_KEY`
-
-Runtime network and host configuration:
-
-- `MCP_ALLOWED_HOSTS`
-- `HTTP_PROXY`
-- `HTTPS_PROXY`
-- `NO_PROXY`
-
-This is not yet embedding-based vector search, but it is a strong stepping stone toward true semantic retrieval.
-
-## Run
+## Running the Web UI
 
 ```bash
-python3 server.py
+python ui.py
 ```
 
-This starts the MCP server over `stdio`, so it will look idle in a terminal until an MCP client connects.
+Open `http://127.0.0.1:8765` in your browser.
 
-## Test Before Connecting
-
-You can test it in two ways.
-
-### 1. Test The MCP Protocol
-
-This checks the handshake, tool listing, and one tool call through the actual MCP wire format:
+**Optional — enable Slack notifications:**
 
 ```bash
-python3 test_client.py
+# Windows
+set SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+python ui.py
+
+# Mac / Linux
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL python ui.py
 ```
 
-What this proves:
+When `SLACK_WEBHOOK_URL` is set, a **Send to Slack** button appears on every result. It posts severity, product area, matched playbook, top questions, and session ID to your channel.
 
-- the server starts correctly
-- `initialize` works
-- `tools/list` works
-- `tools/call` works
+---
 
-### 2. Test A Tool Directly
+## Connect to GitHub Copilot in VS Code
 
-This is useful when you want quick manual testing without an MCP client.
+**Requirements:** VS Code 1.99+ with the GitHub Copilot extension.
 
-Classify a support concern:
+**Step 1 — The config file is already included.**
+`.vscode/mcp.json` is in the repo. Open this project folder in VS Code and it is picked up automatically — no manual config needed.
 
-```bash
-python3 server.py --demo analyze "Customer reports the product is not working and production is impacted"
+**Step 2 — Enable MCP in VS Code.**
+Open your user `settings.json` (`Ctrl+Shift+P` → *Open User Settings (JSON)*) and add:
+
+```json
+"chat.mcp.enabled": true
 ```
 
-Run offline classification only:
+**Step 3 — Activate the server in Copilot Chat.**
+- Open Copilot Chat (`Ctrl+Alt+I`)
+- Click the **Tools** icon (plug icon) at the bottom of the chat panel
+- Enable **dynatrace-support**
 
-```bash
-python3 server.py --demo classify "Customer reports the product is not working and production is impacted"
+**Step 4 — Use it.**
+
+```
+Use dynatrace-support to triage this case: <paste case text>
 ```
 
-Search Dynatrace docs:
-
-```bash
-python3 server.py --demo search "oneagent installation" --sources docs --max-results 3
+```
+Use dynatrace-support to build a bug escalation for: <paste case text>
 ```
 
-Search across all configured connectors:
-
-```bash
-python3 server.py --demo search-all "oneagent installation" --connectors docs community jira slack stackoverflow --max-results 6
+```
+Use dynatrace-support follow_up with session abc-123: the customer says the issue started after upgrading the operator to 0.13
 ```
 
-## Validation UI
+Copilot calls the MCP tools, gets structured diagnosis + live Dynatrace doc references, and writes a specific response for the exact problem described.
 
-For teammates who do not want to use CLI commands, there is now a lightweight local UI in [ui.py](/Users/nitin/Documents/Playground/ui.py).
+---
 
-Run it with:
+## Connect to Claude Desktop
 
-```bash
-python3 ui.py
-```
+**Step 1 — Find your Claude Desktop config file.**
 
-Then open:
+| Platform | Path |
+|---|---|
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Mac | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 
-```text
-http://127.0.0.1:8765
-```
-
-The UI is intentionally simple:
-
-- paste a customer case
-- choose `Triage`, `Investigation Plan`, or `Customer Response`
-- choose `docs` and `community`
-- review the MCP output in the browser
-
-The result references are clickable in the browser UI.
-
-## Office Laptop And Intranet Guides
-
-If your office laptop can reach internal troubleshooting guides over VPN, you can add them without changing code.
-
-1. Allow the internal hosts:
-
-```bash
-export MCP_ALLOWED_HOSTS=docs.dynatrace.com,community.dynatrace.com,intranet.company.com,confluence.company.com
-```
-
-2. Register one or more internal sitemap-based sources:
-
-```bash
-export MCP_EXTRA_SITEMAPS='intranet=https://intranet.company.com/sitemap.xml,runbooks=https://confluence.company.com/sitemap.xml'
-```
-
-3. If your company network requires a proxy, set it too:
-
-```bash
-export HTTPS_PROXY=http://your-proxy:port
-export HTTP_PROXY=http://your-proxy:port
-export NO_PROXY=localhost,127.0.0.1,.company.com
-```
-
-4. Start the UI again:
-
-```bash
-python3 ui.py
-```
-
-5. Open:
-
-```text
-http://127.0.0.1:8765
-```
-
-Now the UI source list will include the extra internal sources such as `Intranet` or `Runbooks`.
-
-Notes:
-
-- the internal source must expose a sitemap URL
-- the sitemap host must be reachable from the laptop
-- the hostname must also be allowed through `MCP_ALLOWED_HOSTS`
-
-List connector readiness:
-
-```bash
-python3 server.py --demo list-connectors
-```
-
-Validate whether a URL is allowed and reachable from the current machine:
-
-```bash
-python3 server.py --demo check-url "https://community.dynatrace.com/t5/Container-platforms/Helm-chart-installation-behind-proxy/m-p/205901"
-```
-
-Prime the local cache for a topic:
-
-```bash
-python3 server.py --demo prime "oneagent installation" --sources docs community --max-pages 8
-```
-
-After priming the cache, later searches and triage runs use semantic-style reranking over the cached corpus.
-
-Debug what the sitemap search returned for one source:
-
-```bash
-python3 server.py --demo debug-search "oneagent installation" --source docs
-```
-
-Read a Dynatrace page:
-
-```bash
-python3 server.py --demo read "https://docs.dynatrace.com/"
-```
-
-Run a triage flow:
-
-```bash
-python3 server.py --demo triage "Customer reports OneAgent stopped sending data after upgrade and production hosts are affected" --sources docs community --max-results 4
-```
-
-Draft an engineering escalation:
-
-```bash
-python3 server.py --demo bug-escalation "Customer reports OneAgent stopped sending data after upgrade and production hosts are affected" --sources docs community --max-results 4
-```
-
-Draft a customer response:
-
-```bash
-python3 server.py --demo customer-response "Customer reports OneAgent stopped sending data after upgrade and production hosts are affected" --sources docs community --max-results 4
-```
-
-Build an investigation plan:
-
-```bash
-python3 server.py --demo investigation-plan "Customer reports DEM synthetic monitors are failing after a frontend rollout and checkout traffic is impacted" --sources docs community --max-results 4
-```
-
-Note:
-
-- `analyze` can still trigger live search, so it needs internet access.
-- `classify` is fully offline and is the fastest first smoke test.
-- `search`, `prime`, `triage`, `bug-escalation`, `customer-response`, and `read` require internet/DNS access from the machine where you run the server.
-- `debug-search` is helpful when search returns no matches and you want to inspect ranked sitemap URLs.
-- in restricted environments, classification-only behavior can still be tested locally.
-
-## Example MCP Client Config
+**Step 2 — Add this block to the config file.**
 
 ```json
 {
   "mcpServers": {
     "dynatrace-support": {
-      "command": "python3",
-      "args": [
-        "/absolute/path/to/server.py"
-      ]
+      "command": "python",
+      "args": ["C:\\Users\\yourname\\MCP\\MCP-\\server.py"]
     }
   }
 }
 ```
 
-## Notes
+> Mac/Linux: use forward slashes — `"/Users/yourname/MCP/MCP-/server.py"`
 
-- The server only allows content from `docs.dynatrace.com` and `community.dynatrace.com`.
-- You can extend the hostname allowlist with `MCP_ALLOWED_HOSTS`, for example: `MCP_ALLOWED_HOSTS=intranet.company.com,confluence.company.com`
-- Proxy-aware fetching uses standard environment variables such as `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`.
-- Search uses Dynatrace site sitemaps instead of a third-party search engine.
-- Cached knowledge is stored locally in `.cache/dynatrace_corpus.json`.
-- The MCP transport is stdio, so it works well with desktop AI clients and local agent frameworks.
-- A strong next step after this would be adding true embeddings, solved-case memory, contradiction detection, and a formal eval suite.
-- Enterprise connectors are scaffolded, but public docs/community remain the only live sources in the current POC.
+**Step 3 — Restart Claude Desktop.**
+
+The tools `triage_case`, `build_investigation_plan`, `build_customer_response`, `build_bug_escalation`, `follow_up`, `submit_correction`, `confirm_answer`, `list_feedback_stats` will appear in Claude's tool panel.
+
+---
+
+## Slack Webhook Setup
+
+1. In your Slack workspace go to **Apps** → search **Incoming Webhooks** → **Add to Slack**
+2. Choose your support channel → **Add Incoming Webhooks Integration**
+3. Copy the Webhook URL (`https://hooks.slack.com/services/...`)
+4. Set `SLACK_WEBHOOK_URL` before starting the UI
+
+Each Slack post includes severity emoji, product area, playbook matched, top 3 questions to ask, and the session ID for follow-up.
+
+---
+
+## Self-Learning (Feedback Loop)
+
+After every result the **"Was this answer helpful?"** panel appears.
+
+- **Submit Correction** — enter what was wrong and what the correct information is. Saved to `.cache/learned_facts.json`.
+- **Confirm Answer** — confirm what worked. Saved as a positive signal.
+
+The next time a similar case runs, the correction surfaces at the top:
+
+```
+=== LEARNED FROM PAST CASES ===
+[!] Verified Correction  (match 72% | area: Extensions)
+   What was wrong : suggested restarting ActiveGate
+   Correct info   : issue was IAM policy drift on the AWS integration role
+================================
+```
+
+---
+
+## Session Continuity (Follow Up)
+
+Every result ends with a Session ID. To continue an investigation:
+
+1. Copy the Session ID from the result footer (e.g. `5998bce0-ae8`)
+2. Switch to **Follow Up** mode in the UI (or use the `follow_up` MCP tool)
+3. Paste the Session ID and type your next message
+
+The system keeps the last 4 turns of context — product area, severity, what was found — and re-diagnoses with the new information merged in.
+
+---
+
+## Adding Custom Playbooks
+
+Edit `playbooks.json` in the project root:
+
+```json
+{
+  "id": "unique_id",
+  "product_area": "Extensions",
+  "title": "Short descriptive title",
+  "triggers": ["exact phrase that must appear in the case text"],
+  "keywords": ["supporting keyword"],
+  "failure_domains": ["What breaks in this scenario"],
+  "questions": ["What to ask the customer"],
+  "evidence": ["What logs or data to collect"],
+  "mitigations": ["Steps to try first"],
+  "escalate_when": ["Condition that warrants DE escalation"]
+}
+```
+
+**Available product areas:** `OneAgent`, `ActiveGate`, `Log Monitoring`, `Extensions`, `DEM`, `Kubernetes Monitoring`, `API / Authentication`, `Metrics Ingestion`, `Davis / Alerting`, `Grail / DQL`, `Cloud Integration`
+
+---
+
+## Project Structure
+
+```
+├── server.py              # MCP stdio server entry point
+├── ui.py                  # Web UI  →  http://127.0.0.1:8765
+├── playbooks.json         # Triage playbooks — add your own here
+├── .vscode/
+│   └── mcp.json           # VS Code / Copilot MCP config (ready to use)
+└── dynatrace_mcp/
+    ├── app.py             # Output builders, search, session logic
+    ├── config.py          # Product area profiles, keywords, synonyms
+    ├── diagnosis.py       # Classification, concern types, severity
+    ├── failure_modes.py   # Failure mode library and inference weights
+    ├── feedback.py        # Self-learning correction and confirmation store
+    ├── session.py         # Session persistence and follow-up context
+    ├── models.py          # Shared data classes
+    └── playbooks.py       # Playbook loader with in-memory cache
+```
