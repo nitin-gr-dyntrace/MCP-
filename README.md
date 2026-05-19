@@ -1,6 +1,6 @@
-# TraceSage 2.0 — Dynatrace Support MCP Server
+# TraceSage — Dynatrace Support MCP Server
 
-A Model Context Protocol (MCP) server that gives Claude and GitHub Copilot structured Dynatrace domain intelligence — live docs, playbooks, failure mode libraries, engineer-verified corrections, and session memory — so every support case gets a specific, actionable response instead of a generic one.
+A Model Context Protocol (MCP) server that gives Claude and GitHub Copilot structured Dynatrace domain intelligence — live docs, semantic search, playbooks, failure mode libraries, contradiction detection, engineer-verified corrections, and session memory — so every support case gets a specific, actionable response instead of a generic one.
 
 ---
 
@@ -11,19 +11,22 @@ A Model Context Protocol (MCP) server that gives Claude and GitHub Copilot struc
 | **Triage** | Product area classification, matched playbooks, failure modes, questions, evidence checklist, customer draft |
 | **Investigation Plan** | Ordered investigation steps, hypotheses, reference pack |
 | **Customer Response** | Ready-to-send customer-facing reply |
-| **Bug Escalation** | DE-ready escalation with component, expected vs actual, evidence |
+| **Bug Escalation** | Engineering-ready escalation with component, expected vs actual, evidence |
 | **Follow Up** | Continues a prior session with full context from previous turns |
+| **Contradiction Detection** | Flags when a new case conflicts with a prior resolution |
 
 **Self-learning** — when an engineer submits a correction, it is stored and automatically surfaced the next time a similar case comes in.
 
-**Slack** — results can be posted directly to a Slack channel with one click.
+**Semantic Search** — uses `sentence-transformers` (`all-MiniLM-L6-v2`) for embedding-based reranking on top of TF-IDF, so intent-based queries match correctly even without exact keyword overlap.
+
+**Slack Bot** — `@tracesage` in any channel triggers full triage, investigation, escalation, or customer response — all powered by the MCP server.
 
 ---
 
 ## Requirements
 
 - Python 3.11+
-- No external pip packages — uses stdlib only
+- Dependencies: `mcp[cli]`, `sentence-transformers`, `numpy`, `slack-bolt`, `python-dotenv`
 
 ---
 
@@ -32,9 +35,18 @@ A Model Context Protocol (MCP) server that gives Claude and GitHub Copilot struc
 ```bash
 git clone https://github.com/nitin-gr-dyntrace/MCP-.git
 cd MCP-
+pip install "mcp[cli]" sentence-transformers numpy slack-bolt python-dotenv
 ```
 
-No `pip install` needed.
+---
+
+## Running the MCP Server
+
+```bash
+python server_sdk.py
+```
+
+This starts the MCP server over `stdio` using the official MCP Python SDK — fully compatible with Claude Desktop and VS Code Copilot.
 
 ---
 
@@ -45,56 +57,6 @@ python ui.py
 ```
 
 Open `http://127.0.0.1:8765` in your browser.
-
-**Optional — enable Slack notifications:**
-
-```bash
-# Windows
-set SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
-python ui.py
-
-# Mac / Linux
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL python ui.py
-```
-
-When `SLACK_WEBHOOK_URL` is set, a **Send to Slack** button appears on every result. It posts severity, product area, matched playbook, top questions, and session ID to your channel.
-
----
-
-## Connect to GitHub Copilot in VS Code
-
-**Requirements:** VS Code 1.99+ with the GitHub Copilot extension.
-
-**Step 1 — The config file is already included.**
-`.vscode/mcp.json` is in the repo. Open this project folder in VS Code and it is picked up automatically — no manual config needed.
-
-**Step 2 — Enable MCP in VS Code.**
-Open your user `settings.json` (`Ctrl+Shift+P` → *Open User Settings (JSON)*) and add:
-
-```json
-"chat.mcp.enabled": true
-```
-
-**Step 3 — Activate the server in Copilot Chat.**
-- Open Copilot Chat (`Ctrl+Alt+I`)
-- Click the **Tools** icon (plug icon) at the bottom of the chat panel
-- Enable **dynatrace-support**
-
-**Step 4 — Use it.**
-
-```
-Use dynatrace-support to triage this case: <paste case text>
-```
-
-```
-Use dynatrace-support to build a bug escalation for: <paste case text>
-```
-
-```
-Use dynatrace-support follow_up with session abc-123: the customer says the issue started after upgrading the operator to 0.13
-```
-
-Copilot calls the MCP tools, gets structured diagnosis + live Dynatrace doc references, and writes a specific response for the exact problem described.
 
 ---
 
@@ -107,46 +69,148 @@ Copilot calls the MCP tools, gets structured diagnosis + live Dynatrace doc refe
 | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
 | Mac | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 
-**Step 2 — Add this block to the config file.**
+**Step 2 — Add this block.**
 
 ```json
 {
   "mcpServers": {
     "dynatrace-support": {
       "command": "python",
-      "args": ["C:\\Users\\yourname\\MCP\\MCP-\\server.py"]
+      "args": ["C:\\Users\\yourname\\MCP\\MCP-\\server_sdk.py"],
+      "cwd": "C:\\Users\\yourname\\MCP\\MCP-"
     }
   }
 }
 ```
 
-> Mac/Linux: use forward slashes — `"/Users/yourname/MCP/MCP-/server.py"`
+> Mac/Linux: use forward slashes — `"/Users/yourname/MCP/MCP-/server_sdk.py"`
 
 **Step 3 — Restart Claude Desktop.**
 
-The tools `triage_case`, `build_investigation_plan`, `build_customer_response`, `build_bug_escalation`, `follow_up`, `submit_correction`, `confirm_answer`, `list_feedback_stats` will appear in Claude's tool panel.
+Click `+` → **Connectors** → toggle `dynatrace-support` ON.
 
 ---
 
-## Slack Webhook Setup
+## Connect to GitHub Copilot in VS Code
 
-1. In your Slack workspace go to **Apps** → search **Incoming Webhooks** → **Add to Slack**
-2. Choose your support channel → **Add Incoming Webhooks Integration**
-3. Copy the Webhook URL (`https://hooks.slack.com/services/...`)
-4. Set `SLACK_WEBHOOK_URL` before starting the UI
+**Step 1** — `.vscode/mcp.json` is already in the repo. Open the project in VS Code — it is picked up automatically.
 
-Each Slack post includes severity emoji, product area, playbook matched, top 3 questions to ask, and the session ID for follow-up.
+**Step 2** — Open User Settings (`Ctrl+Shift+P` → *Open User Settings JSON*) and add:
+
+```json
+"chat.mcp.enabled": true
+```
+
+**Step 3** — Open Copilot Chat → click the **Tools** icon → enable **dynatrace-support**.
+
+---
+
+## All 15 MCP Tools
+
+### 🔍 Search & Read
+| Tool | What it does |
+|---|---|
+| `search_dynatrace_knowledge` | Semantic search across DT docs + community |
+| `search_support_sources` | Search across all configured connectors |
+| `read_dynatrace_page` | Fetch and extract a specific DT URL |
+| `check_url_access` | Validate if a URL is reachable from this machine |
+
+### 🏥 Triage & Analysis
+| Tool | What it does |
+|---|---|
+| `triage_case` | Full structured support triage with contradiction detection |
+| `analyze_customer_concern` | Classify issue + suggest support path |
+| `build_investigation_plan` | Ordered investigation steps with hypotheses |
+
+### ✍️ Drafting
+| Tool | What it does |
+|---|---|
+| `build_bug_escalation` | Engineering-ready escalation draft |
+| `build_customer_response` | Polished customer-facing reply |
+
+### 🧠 Memory & Sessions
+| Tool | What it does |
+|---|---|
+| `follow_up` | Continue a prior case by session ID |
+| `prime_topic_cache` | Pre-load docs for a topic into local cache |
+
+### 📊 Connectors & Feedback
+| Tool | What it does |
+|---|---|
+| `list_connectors` | Show live vs scaffolded connectors |
+| `submit_correction` | Tell the MCP an answer was wrong |
+| `confirm_answer` | Tell the MCP an answer was correct |
+| `list_feedback_stats` | Show correction/confirmation stats |
+
+---
+
+## Slack Bot (Tracesage)
+
+**Setup:**
+
+1. Create a Slack app at `api.slack.com/apps`
+2. Enable **Socket Mode** — generate an `xapp-` token
+3. Subscribe to `app_mention` + `message.channels` events
+4. Install to workspace — copy the `xoxb-` bot token
+5. Create a `.env` file in the project root:
+
+```env
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+```
+
+**Run:**
+
+```bash
+python slack_bot.py
+```
+
+**Commands in Slack:**
+
+| Command | Example |
+|---|---|
+| `triage` | `@tracesage triage: OneAgent stopped sending data after upgrade on 50 Linux hosts` |
+| `investigate` | `@tracesage investigate: ActiveGate hitting soft limits on PostgreSQL Extension` |
+| `escalate` | `@tracesage escalate: DEM synthetic monitors failing after frontend rollout` |
+| `respond` | `@tracesage respond: Customer asks why metrics are missing after host restart` |
+| `analyze` | `@tracesage analyze: Kubernetes monitoring showing intermittent gaps in pod visibility` |
+
+---
+
+## Semantic Search
+
+Uses `sentence-transformers` with `all-MiniLM-L6-v2` for hybrid reranking:
+
+```
+score = 0.60 × embedding_cosine_similarity + 0.40 × TF-IDF_score
+```
+
+Embeddings are cached to `.cache/embeddings_cache.json` — first run is slower, subsequent runs are instant.
+
+Falls back to pure TF-IDF if `sentence-transformers` is not installed.
+
+---
+
+## Contradiction Detection
+
+Every `triage_case` call scans prior sessions for conflicts:
+
+- **Version conflict** — same version was previously marked as resolved
+- **Action conflict** — prior session recommended rollback, current suggests upgrade
+- **Config conflict** — prior session said disable X, current says enable X
+
+Conflicts appear as a `⚠️ CONTRADICTION WARNINGS` block in the triage output.
 
 ---
 
 ## Self-Learning (Feedback Loop)
 
-After every result the **"Was this answer helpful?"** panel appears.
+After every result:
 
-- **Submit Correction** — enter what was wrong and what the correct information is. Saved to `.cache/learned_facts.json`.
+- **Submit Correction** — enter what was wrong and the correct info. Saved to `.cache/learned_facts.json`.
 - **Confirm Answer** — confirm what worked. Saved as a positive signal.
 
-The next time a similar case runs, the correction surfaces at the top:
+Next time a similar case runs, the correction surfaces at the top:
 
 ```
 === LEARNED FROM PAST CASES ===
@@ -158,56 +222,52 @@ The next time a similar case runs, the correction surfaces at the top:
 
 ---
 
-## Session Continuity (Follow Up)
+## Session Continuity
 
-Every result ends with a Session ID. To continue an investigation:
+Every result ends with a Session ID. To continue:
 
-1. Copy the Session ID from the result footer (e.g. `5998bce0-ae8`)
-2. Switch to **Follow Up** mode in the UI (or use the `follow_up` MCP tool)
+1. Copy the Session ID (e.g. `5998bce0-ae8`)
+2. Use **Follow Up** mode in the UI or `follow_up` MCP tool
 3. Paste the Session ID and type your next message
 
-The system keeps the last 4 turns of context — product area, severity, what was found — and re-diagnoses with the new information merged in.
-
----
-
-## Adding Custom Playbooks
-
-Edit `playbooks.json` in the project root:
-
-```json
-{
-  "id": "unique_id",
-  "product_area": "Extensions",
-  "title": "Short descriptive title",
-  "triggers": ["exact phrase that must appear in the case text"],
-  "keywords": ["supporting keyword"],
-  "failure_domains": ["What breaks in this scenario"],
-  "questions": ["What to ask the customer"],
-  "evidence": ["What logs or data to collect"],
-  "mitigations": ["Steps to try first"],
-  "escalate_when": ["Condition that warrants DE escalation"]
-}
-```
-
-**Available product areas:** `OneAgent`, `ActiveGate`, `Log Monitoring`, `Extensions`, `DEM`, `Kubernetes Monitoring`, `API / Authentication`, `Metrics Ingestion`, `Davis / Alerting`, `Grail / DQL`, `Cloud Integration`
+The system keeps the last 4 turns of context and re-diagnoses with new information merged in.
 
 ---
 
 ## Project Structure
 
 ```
-├── server.py              # MCP stdio server entry point
-├── ui.py                  # Web UI  →  http://127.0.0.1:8765
-├── playbooks.json         # Triage playbooks — add your own here
-├── .vscode/
-│   └── mcp.json           # VS Code / Copilot MCP config (ready to use)
+├── server.py                      # Legacy MCP stdio entry point
+├── server_sdk.py                  # MCP server using official SDK (use this)
+├── slack_bot.py                   # Tracesage Slack bot
+├── ui.py                          # Web UI → http://127.0.0.1:8765
+├── playbooks.json                 # Triage playbooks — add your own here
+├── eval.py                        # Evaluation harness
+├── eval_cases.json                # Evaluation test cases
+├── .env                           # Slack tokens (not committed)
+├── .vscode/mcp.json               # VS Code / Copilot MCP config
 └── dynatrace_mcp/
-    ├── app.py             # Output builders, search, session logic
-    ├── config.py          # Product area profiles, keywords, synonyms
-    ├── diagnosis.py       # Classification, concern types, severity
-    ├── failure_modes.py   # Failure mode library and inference weights
-    ├── feedback.py        # Self-learning correction and confirmation store
-    ├── session.py         # Session persistence and follow-up context
-    ├── models.py          # Shared data classes
-    └── playbooks.py       # Playbook loader with in-memory cache
+    ├── app.py                     # Output builders, search, session logic
+    ├── config.py                  # Product area profiles, keywords, synonyms
+    ├── diagnosis.py               # Classification, concern types, severity
+    ├── embeddings.py              # Semantic search with sentence-transformers
+    ├── contradiction.py           # Contradiction detection across sessions
+    ├── failure_modes.py           # Failure mode library and inference weights
+    ├── feedback.py                # Self-learning correction and confirmation store
+    ├── session.py                 # Session persistence and follow-up context
+    ├── models.py                  # Shared data classes
+    └── playbooks.py               # Playbook loader with in-memory cache
 ```
+
+---
+
+## Connector Roadmap
+
+Live now:
+- `docs` — `docs.dynatrace.com`
+- `community` — `community.dynatrace.com`
+
+Scaffolded (ready to wire):
+- `jira` — needs `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`
+- `slack` — needs `SLACK_BOT_TOKEN`, `SLACK_ALLOWED_CHANNELS`
+- `stackoverflow` — needs `STACKEXCHANGE_API_KEY`

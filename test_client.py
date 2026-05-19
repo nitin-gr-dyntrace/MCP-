@@ -6,7 +6,7 @@ import sys
 from typing import Any
 
 
-SERVER_PATH = "/Users/nitin/Documents/Playground/server.py"
+SERVER_PATH = r"C:\Users\nitin.gr\MCP\Dynatrace-MCP\server.py"
 
 
 def send_message(process: subprocess.Popen[bytes], message: dict[str, Any]) -> None:

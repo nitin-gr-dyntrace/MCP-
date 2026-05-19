@@ -49,7 +49,7 @@ _EXTRA_SEARCH_SOURCES, _EXTRA_SITEMAP_URLS = _load_extra_sitemap_sources()
 SEARCH_SOURCES.update(_EXTRA_SEARCH_SOURCES)
 SITEMAP_URLS.update(_EXTRA_SITEMAP_URLS)
 
-CACHE_DIR = Path(".cache")
+CACHE_DIR = Path(__file__).parent.parent / ".cache"
 CORPUS_PATH = CACHE_DIR / "dynatrace_corpus.json"
 PLAYBOOKS_PATH = Path("playbooks.json")
 

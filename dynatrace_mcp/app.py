@@ -27,6 +27,8 @@ from .config import (
     configured_allowed_hosts,
 )
 from .diagnosis import classify_concern, diagnose_problem, matched_product_profiles
+from .embeddings import EMBEDDINGS_AVAILABLE, embed_query, rerank_with_embeddings
+from .contradiction import detect_contradictions, format_contradictions
 from .feedback import get_feedback_store, inject_learned_context
 from .models import ConnectorDocument, CorpusEntry, Diagnosis, SearchResult
 from .session import (
@@ -466,23 +468,28 @@ def rank_cached_entries(query: str, sources: list[str], max_results: int, diagno
         if entry.source in sources and page_type_allowed(entry.page_type)
     ]
     corpus_entries = entries or load_corpus()
-    ranked = sorted(
-        (
-            (
-                score_entry_for_query(entry, query)
-                + (semantic_similarity(entry, query, corpus_entries) * 100.0)
-                + diagnosis_alignment_score(entry, diagnosis),
-                entry,
-            )
-            for entry in entries
-        ),
-        key=lambda item: item[0],
-        reverse=True,
-    )
+
+    # Build TF-IDF scores keyed by URL
+    tfidf_scores: dict[str, float] = {
+        entry.url: (
+            score_entry_for_query(entry, query)
+            + (semantic_similarity(entry, query, corpus_entries) * 100.0)
+            + diagnosis_alignment_score(entry, diagnosis)
+        )
+        for entry in entries
+    }
+
+    if EMBEDDINGS_AVAILABLE and entries:
+        reranked = rerank_with_embeddings(entries, query, CORPUS_PATH, tfidf_scores, top_k=max_results)
+        return [entry_to_search_result(e) for e, _ in reranked]
+
+    # Fallback: pure TF-IDF
+    ranked = sorted(tfidf_scores.items(), key=lambda x: x[1], reverse=True)
+    url_to_entry = {e.url: e for e in entries}
     return [
-        entry_to_search_result(entry)
-        for score, entry in ranked
-        if score > 0
+        entry_to_search_result(url_to_entry[url])
+        for url, score in ranked
+        if score > 0 and url in url_to_entry
     ][:max_results]
 
 
@@ -1427,8 +1434,17 @@ def build_triage_text(problem_statement: str, sources: list[str], max_results: i
         format_results(results),
     ]
     output = "\n".join(parts)
+
+    # Contradiction detection — scan prior sessions for conflicting resolutions
+    contradictions = detect_contradictions(
+        problem_statement=problem_statement,
+        current_resolution_draft=output,
+        product_area=component,
+    )
+    contradiction_block = format_contradictions(contradictions)
+
     append_turn(session, "triage_case", problem_statement, output, component, severity)
-    return output + session_footer(session)
+    return output + contradiction_block + session_footer(session)
 
 
 def build_bug_escalation_text(problem_statement: str, sources: list[str], max_results: int, session_id: str = "") -> str:
@@ -2228,9 +2244,12 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
     params = message.get("params", {})
 
     if method == "initialize":
+        # Echo back the client's requested protocol version so Claude Desktop
+        # (which sends "2025-11-25") does not reject the handshake on mismatch.
+        client_version = params.get("protocolVersion", "2025-11-25")
         return ok(
             {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": client_version,
                 "capabilities": {
                     "tools": {},
                 },
