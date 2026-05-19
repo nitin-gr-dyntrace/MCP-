@@ -266,8 +266,8 @@ The system keeps the last 4 turns of context and re-diagnoses with new informati
 Live now:
 - `docs` — `docs.dynatrace.com`
 - `community` — `community.dynatrace.com`
+- `slack` — Tracesage bot via Socket Mode (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` in `.env`)
 
 Scaffolded (ready to wire):
 - `jira` — needs `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`
-- `slack` — needs `SLACK_BOT_TOKEN`, `SLACK_ALLOWED_CHANNELS`
 - `stackoverflow` — needs `STACKEXCHANGE_API_KEY`
