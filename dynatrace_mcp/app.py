@@ -954,19 +954,23 @@ class StackOverflowConnector(BaseConnector):
 
 class SlackConnector(BaseConnector):
     name = "slack"
-    enabled = False
     source_type = "chat_thread"
     trust_level = "internal"
 
+    def __init__(self) -> None:
+        from .slack_connector import SLACK_AVAILABLE, slack_connector_status
+        self.enabled = SLACK_AVAILABLE
+        self._status_fn = slack_connector_status
+
     def search(self, query: str, max_results: int) -> list[ConnectorDocument]:
-        raise RuntimeError(
-            "Slack connector is scaffolded but not enabled yet. Add Slack Web API integration and approved channel scoping."
-        )
+        from .slack_connector import search_slack
+        return search_slack(query, max_results)
 
     def status(self) -> dict[str, Any]:
-        status = super().status()
-        status["required_env"] = ["SLACK_BOT_TOKEN", "SLACK_ALLOWED_CHANNELS"]
-        return status
+        base = super().status()
+        from .slack_connector import slack_connector_status
+        base.update(slack_connector_status())
+        return base
 
 
 class JiraConnector(BaseConnector):
@@ -1734,7 +1738,7 @@ def list_tools() -> dict[str, Any]:
             },
             {
                 "name": "search_support_sources",
-                "description": "Search across configured support connectors. Public sources work now; Jira, Slack, and Stack Overflow are scaffolded for later integration.",
+                "description": "Search across configured support connectors including Dynatrace docs, community, and Slack channel history. Jira and Stack Overflow are scaffolded for later integration.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
